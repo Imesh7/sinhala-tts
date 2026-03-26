@@ -42,7 +42,6 @@ class Zipformer(nn.Module):
         x = x.permute(1, 0, 2)
         return x
 
-    
 
 class ZipformerEcoder(nn.Module):
     def __init__(self, encoder_layers):
@@ -53,6 +52,7 @@ class ZipformerEcoder(nn.Module):
         for layer in self.encoder_layer:
             x = layer(x)
         return x
+
 
 class DownsampledZipformerEncoder(nn.Module):
     def __init__(self, encoder_layer):
@@ -162,7 +162,9 @@ class ZipformerBlock(nn.Module):
         super().__init__()
         self.feed_forward_1 = ZipformerFeedForward()
         self.non_linear_attention = NonLinearAttention()
-        self.self_attention_1 = SelfAttention(d_in=512, d_out=512, d_v_out=512)
+        self.self_attention_1 = RelativePositionalMultiHeadAttention(
+            d_in=512, d_out=512, d_v_out=512
+        )
         self.convolution_1 = convolution()
 
         self.feed_forward_2 = ZipformerFeedForward()
@@ -173,8 +175,23 @@ class ZipformerBlock(nn.Module):
         self.bias_norm = BiasNorm(512)
         self.bypass_2 = ByPass(emb_dim=512, skip_rate=0.1, straight_through_rate=0.1)
 
-    def forward(self, x):
-        return x
+    def forward(self, x, atten_masks=None):
+        atten_weights = self.self_attention_1(x)
+
+        x = self.feed_forward_1(x)
+        x = self.non_linear_attention(x, atten_weights)
+        x = self.self_attention_1(x, atten_weights)
+
+        # conv
+
+        x = self.feed_forward_2(x)
+        x = self.bypass_1(x, c)
+        x = self.self_attention_2(x)
+        # conv
+        x = self.feed_forward_3(x)
+
+        x = self.bias_norm(x)
+        x = self.bypass_2(x, c)
 
 
 class ZipformerFeedForward(nn.Module):
@@ -210,7 +227,11 @@ class NonLinearAttention(nn.Module):
         super().__init__()
         self.in_proj = nn.Linear(512, 512 * 3)
         self.tanh = nn.Tanh()
-        self.single_head_atten = MultiHeadAttention(d_in=512, d_out=512, num_heads=1)
+        self.relative_positional_multi_head_atten = (
+            RelativePositionalMultiHeadAttention(
+                d_in=512, d_out=512, num_heads=1, q_head_dim=512, pos_head_dim=512
+            )
+        )
         self.out_proj = nn.Linear(512, 512)
 
     def forward(self, x, single_head_atten_weights=None):
@@ -249,45 +270,55 @@ class SelfAttention(nn.Module):
 of SelfAttention and concatenating their outputs."""
 
 
-class MultiHeadAttention(nn.Module):
-    def __init__(self, d_in, d_out, num_heads):
+class RelativePositionalMultiHeadAttention(nn.Module):
+    def __init__(self, d_in, d_out, num_heads, q_head_dim, pos_head_dim):
         super().__init__()
         self.num_heads = num_heads
-        self.head_dim = d_out // num_heads
+        self.d_in = d_in
+        self.d_out = d_out
+        self.query_head_dim = q_head_dim
+        k_head_dim = q_head_dim
+        self.pos_head_dim = pos_head_dim
 
-        self.q = nn.Linear(d_in, d_out)
-        self.k = nn.Linear(d_in, d_out)
-        self.v = nn.Linear(d_in, d_out)
+        d_out_dim = (d_out + k_head_dim + pos_head_dim) // num_heads
+
+        self.in_proj = nn.Linear(d_in, d_out_dim)
+
+    def scaled_dot_product_attention(self, q, k, v):
+        attn_scores = torch.matmul(q, k.transpose(-2, -1)) / (self.query_head_dim**0.5)
+        attn_weights = torch.softmax(attn_scores, dim=-1)
+        output = torch.matmul(attn_weights, v)
+        return output
 
     def forward(self, x):
-        batch_size = x.size(0)
+        x = self.in_proj(x)
+        seq_len, batch_size, d_in = x.shape
+        out = self.query_head_dim * self.num_heads
 
-        q = (
-            self.q(x)
-            .view(batch_size, -1, self.num_heads, self.head_dim)
-            .transpose(1, 2)
-        )
-        k = (
-            self.k(x)
-            .view(batch_size, -1, self.num_heads, self.head_dim)
-            .transpose(1, 2)
-        )
-        v = (
-            self.v(x)
-            .view(batch_size, -1, self.num_heads, self.head_dim)
-            .transpose(1, 2)
-        )
+        q = x[..., 0:out]
+        k = x[..., out : 2 * out]
+        p = x[..., 2 * out :]
 
-        attn_weights = torch.matmul(q, k.transpose(-2, -1)) / (self.head_dim**0.5)
-        attn_weights = torch.softmax(attn_weights, dim=-1)
+        q = q.reshape(seq_len, batch_size, self.num_heads, self.query_head_dim)
+        k = k.reshape(seq_len, batch_size, self.num_heads, self.query_head_dim)
+        p = p.reshape(seq_len, batch_size, self.num_heads, self.pos_head_dim)
 
-        output = (
-            torch.matmul(attn_weights, v)
-            .transpose(1, 2)
-            .contiguous()
-            .view(batch_size, -1, self.num_heads * self.head_dim)
-        )
-        return output
+        q = q.permute(2, 1, 0, 3)
+        k = k.permute(2, 1, 3, 0)
+        p = p.permute(2, 1, 0, 3)
+
+        attn_scores = torch.matmul(q, k)
+
+        use_pos_scores = None
+        if not self.training or random.random() >= float(self.pos_emb_skip_rate):
+            use_pos_scores = True
+
+        if use_pos_scores:
+            pos_scores = torch.matmul(q, p.transpose(-2, -1))
+            attn_scores += pos_scores
+
+        attn_weights = torch.softmax(attn_scores, dim=-1)
+        return attn_weights
 
 
 """
