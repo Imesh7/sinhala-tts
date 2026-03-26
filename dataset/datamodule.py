@@ -11,7 +11,7 @@ class DataModule(torch.utils):
         self.data = data
 
     def dataloader(self, batch_size, shuffle=True):
-        dataset = TTSDataset(self.data)  # Assuming TTSDataset is defined elsewhere
+        dataset = TTSDataset(self.data)
 
         data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
         return data_loader
