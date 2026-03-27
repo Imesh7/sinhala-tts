@@ -25,8 +25,8 @@ class ZipVoice(nn.Module):
         super(ZipVoice, self).__init__()
 
         self.text_encoder = Zipformer(
-            text_emb_dim,
             feat_dim,
+            text_emb_dim,
             down_sample_factors,
             text_encoder_dim,
             pos_dim=pos_dim,

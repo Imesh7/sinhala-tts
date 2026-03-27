@@ -36,10 +36,11 @@ class Zipformer(nn.Module):
 
         for i in range(num_encoder_layers):
             zipformer_block = ZipformerBlock(
-                d_in=d_in,
-                d_out=d_out,
+                emb_dim=encoder_dim,
                 pos_emb=pos_dim,
                 num_heads=num_heads,
+                q_head_dim=q_head_dim,
+                v_head_dim=v_head_dim
             )
             encoder = ZipformerEncoder(zipformer_block)
 
@@ -182,46 +183,45 @@ def conv_2d(in_channels, out_channels, kernel_size=3, padding=1, stride=1):
 
 
 class ZipformerBlock(nn.Module):
-    def __init__(self, d_in, d_out, pos_emb, num_heads, q_head_dim, v_head_dim):
+    def __init__(self, emb_dim, pos_emb, num_heads, q_head_dim, v_head_dim):
         super().__init__()
         self.feed_forward_1 = ZipformerFeedForward()
-        self.non_linear_attention = NonLinearAttention()
+        self.non_linear_attention = NonLinearAttention(channels=emb_dim, hidden_channels=(3 * emb_dim) // 4)
         self.self_attention_1 = RelativePositionalMultiHeadAttention(
-            d_in=d_in,
-            d_out=d_out,
+            d_in=emb_dim,
             d_v_out=pos_emb,
             num_heads=num_heads,
             q_head_dim=q_head_dim,
         )
 
-        self.convolution_1 = Convolution(channels=512, kernel_size=3)
+        self.convolution_1 = Convolution(channels=emb_dim, kernel_size=3)
 
         self.feed_forward_2 = ZipformerFeedForward()
-        self.bypass_1 = ByPass(emb_dim=512, skip_rate=0.1, straight_through_rate=0.1)
-        self.self_attention_2 = SelfAttention(d_in=emb, d_out=512, d_v_out=v_head_dim)
+        self.bypass_1 = ByPass(emb_dim=emb_dim, skip_rate=0.1, straight_through_rate=0.1)
+        self.self_attention_2 = SelfAttention(emb_dim=emb_dim, d_v_out=v_head_dim)
 
         self.feed_forward_3 = ZipformerFeedForward()
-        self.bias_norm = BiasNorm(512)
-        self.bypass_2 = ByPass(emb_dim=512, skip_rate=0.1, straight_through_rate=0.1)
+        self.bias_norm = BiasNorm(emb_dim)
+        self.bypass_2 = ByPass(emb_dim=emb_dim, skip_rate=0.1, straight_through_rate=0.1)
 
-        self.convolution_2 = Convolution(channels=512, kernel_size=3)
+        self.convolution_2 = Convolution(channels=emb_dim, kernel_size=3)
 
     def forward(self, x, atten_masks=None):
         atten_weights = self.self_attention_1(x)
 
-        x = self.feed_forward_1(x)
-        x = self.non_linear_attention(x, atten_weights)
-        x = self.self_attention_1(x, atten_weights)
+        x = x + self.feed_forward_1(x)
+        x = x + self.non_linear_attention(x, atten_weights)
+        x = x + self.self_attention_1(x, atten_weights)
 
-        x = self.convolution_1(x)
+        x = x + self.convolution_1(x)
 
-        x = self.feed_forward_2(x)
+        x = x + self.feed_forward_2(x)
         x = self.bypass_1(x, c)
-        x = self.self_attention_2(x)
+        x = x + self.self_attention_2(x)
 
-        x = self.convolution_2(x)
+        x = x + self.convolution_2(x)
 
-        x = self.feed_forward_3(x)
+        x = x + self.feed_forward_3(x)
 
         x = self.bias_norm(x)
         x = self.bypass_2(x, c)
@@ -256,28 +256,33 @@ class ZipformerFeedForward(nn.Module):
 
 
 class NonLinearAttention(nn.Module):
-    def __init__(self):
+    def __init__(self, channels, hidden_channels):
         super().__init__()
-        self.in_proj = nn.Linear(512, 512 * 3)
+        self.hidden_channels = hidden_channels
+        self.in_proj = nn.Linear(channels, hidden_channels * 3, bias=True)
         self.tanh = nn.Tanh()
-        self.relative_positional_multi_head_atten = (
-            RelativePositionalMultiHeadAttention(
-                d_in=512, d_out=512, num_heads=1, q_head_dim=512, pos_head_dim=512
-            )
-        )
-        self.out_proj = nn.Linear(512, 512)
+        self.out_proj = nn.Linear(hidden_channels, channels, bias=True)
 
-    def forward(self, x, single_head_atten_weights=None):
+    def forward(self, x : Tensor, atten_weights : Tensor=None):
         x = self.in_proj(x)
-        s, y, z = x.chunk(3, dim=-1)
+        (seq_len, batch_size, _) =  x.shape
+        
+        s, x, y = x.chunk(3, dim=2)
         s = self.tanh(s)
-        s *= y
-        s = self.single_head_atten(s)
-        s *= single_head_atten_weights
-        s *= z
-
-        s = self.out_proj(s)
-        return s
+        
+        s = s.unsqueeze(-1).reshape(seq_len, batch_size, self.hidden_channels)
+        x = x * s
+        
+        (seq_len, batch_size, embed_dim) = x.shape
+        num_heads = atten_weights.shape[0]
+        x = x.reshape(seq_len, batch_size, num_heads, -1).permute(2, 1, 0, 3)
+        x = torch.matmul(x,  atten_weights)
+        
+        x = x.permute(2, 1, 0, 3).reshape(seq_len, batch_size, -1)
+        
+        x = x * y
+        x = self.out_proj(x)
+        return x
 
 
 class SelfAttention(nn.Module):
@@ -312,8 +317,7 @@ class SelfAttention(nn.Module):
 class RelativePositionalMultiHeadAttention(nn.Module):
     def __init__(
         self,
-        d_in,
-        d_out,
+        emb_dim,
         num_heads,
         q_head_dim,
         pos_head_dim,
@@ -321,16 +325,15 @@ class RelativePositionalMultiHeadAttention(nn.Module):
     ):
         super().__init__()
         self.num_heads = num_heads
-        self.d_in = d_in
-        self.d_out = d_out
+        self.emb_dim = emb_dim
         self.query_head_dim = q_head_dim
         k_head_dim = q_head_dim
         self.pos_head_dim = pos_head_dim
         self.pos_emb_skip_rate = copy.deepcopy(pos_emb_skip_rate)
 
-        d_out_dim = (d_out + k_head_dim + pos_head_dim) // num_heads
+        d_out_dim = (emb_dim + k_head_dim + pos_head_dim) // num_heads
 
-        self.in_proj = nn.Linear(d_in, d_out_dim)
+        self.in_proj = nn.Linear(emb_dim, d_out_dim)
 
     def scaled_dot_product_attention(self, q, k, v):
         attn_scores = torch.matmul(q, k.transpose(-2, -1)) / (self.query_head_dim**0.5)
