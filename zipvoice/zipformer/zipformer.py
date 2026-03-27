@@ -1,9 +1,12 @@
+from shutil import copy
+
 import torch
 import torch.nn as nn
 import random
 from torch import Tensor
 
 from zipvoice.zipformer.biasnorm import BiasNorm
+from zipvoice.zipformer.scaling import FloatLike, ScheduledFloat
 
 
 class Zipformer(nn.Module):
@@ -269,7 +272,7 @@ of SelfAttention and concatenating their outputs."""
 
 
 class RelativePositionalMultiHeadAttention(nn.Module):
-    def __init__(self, d_in, d_out, num_heads, q_head_dim, pos_head_dim):
+    def __init__(self, d_in, d_out, num_heads, q_head_dim, pos_head_dim, pos_emb_skip_rate: FloatLike = ScheduledFloat([(0, 0.5), (4000, 0)])):
         super().__init__()
         self.num_heads = num_heads
         self.d_in = d_in
@@ -277,6 +280,7 @@ class RelativePositionalMultiHeadAttention(nn.Module):
         self.query_head_dim = q_head_dim
         k_head_dim = q_head_dim
         self.pos_head_dim = pos_head_dim
+        self.pos_emb_skip_rate = copy.deepcopy(pos_emb_skip_rate)
 
         d_out_dim = (d_out + k_head_dim + pos_head_dim) // num_heads
 
