@@ -1,3 +1,5 @@
+from typing import List
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -8,12 +10,28 @@ import math
 
 
 class ZipVoice(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim):
+    def __init__(
+        self,
+        down_sample_factors=[1, 2, 4, 2, 1],
+        d_in: int = 192,
+        feat_dim: int = 100,
+        text_emb_dim: int = 192,
+        text_encoder_dim: int = 192,
+        encoder_dim: int = 512,
+        pos_dim: int = 48,
+        q_head_dim: int = 32,
+        v_head_dim: int = 12,
+    ):
         super(ZipVoice, self).__init__()
-        self.text_encoder = Zipformer(input_dim, hidden_dim, output_dim)
-        self.vector_field_esti = Zipformer(input_dim, hidden_dim, output_dim)
+        self.text_encoder = Zipformer(
+            text_emb_dim, feat_dim, down_sample_factors, text_encoder_dim
+        )
 
-    def forward(self, x, features, noise, t):
+        self.vector_field_estimator = Zipformer(
+            feat_dim * 3, feat_dim, down_sample_factors, encoder_dim
+        )
+
+    def forward(self, x: List[List[int]], features: torch.Tensor, noise, t: int):
         x = self.text_encoder(x)
 
         text_cond = average_upsample(x, features, fill_value=0)
@@ -25,12 +43,12 @@ class ZipVoice(nn.Module):
         # x_1 -> target
         # x_0 -> noise
         # x_t -> predicted noise
-        x_t = t * features + (1-t) * noise
+        x_t = t * features + (1 - t) * noise
         u_t = x_t - noise
 
         combined = torch.cat([x_t, text_cond, speech_cond], dim=-1)
 
-        v_t = self.vector_field_esti(combined, x_t)
+        v_t = self.vector_field_estimator(combined, x_t)
 
         loss = F.mse_loss(v_t, u_t)
         return x, loss

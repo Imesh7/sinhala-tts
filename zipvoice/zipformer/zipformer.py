@@ -1,4 +1,5 @@
 from shutil import copy
+from typing import List
 
 import torch
 import torch.nn as nn
@@ -7,29 +8,38 @@ from torch import Tensor
 
 from zipvoice.zipformer.biasnorm import BiasNorm
 from zipvoice.zipformer.scaling import FloatLike, ScheduledFloat
+from zipvoice.zipformer.swosh_activation import Swoosh
 
 
 class Zipformer(nn.Module):
     def __init__(
         self,
-        in_dim,
-        out_dim,
+        d_in,
+        d_out,
+        down_sample_factor: List[int] = [1, 2, 4, 2, 1],
         encoder_dim=384,
-        num_encoder_layers: int = 4,
+        num_heads=4,
+        pos_dim=48,
     ):
         super(Zipformer, self).__init__()
-        self.conv_emb = conv_embedding(self, in_channels=in_dim, out_channels=out_dim)
+        self.conv_emb = ConvolutionalEmbedding(
+            in_channels=d_in, out_channels=encoder_dim
+        )
 
-        self.in_proj = nn.Linear(in_dim, encoder_dim)
-        self.out_proj = nn.Linear(encoder_dim, out_dim)
+        self.in_proj = nn.Linear(d_in, encoder_dim)
+        self.out_proj = nn.Linear(encoder_dim, d_out)
 
         encoder_layer = []
-        encoder_layer.append(ZipformerBlock())
+        num_encoder_layers = len(down_sample_factor)
 
-        for _ in range(num_encoder_layers):
-            zipformer_block = ZipformerBlock()
-            encoder = ZipformerEcoder(zipformer_block)
-            downsampled_encoder = DownsampledZipformerEncoder(encoder_layer=encoder)
+        for i in range(num_encoder_layers):
+            zipformer_block = ZipformerBlock(
+                d_in=d_in, d_out=d_out,pos_emb=pos_dim, num_heads=num_heads
+            )
+            encoder = ZipformerEncoder(zipformer_block)
+
+            if down_sample_factor[i] > 1:
+                downsampled_encoder = DownsampledZipformerEncoder(encoder_layer=encoder)
 
             encoder_layer.append(downsampled_encoder)
 
@@ -38,6 +48,7 @@ class Zipformer(nn.Module):
     def forward(self, x, atten_masks=None):
         x = x.permute(1, 0, 2)
         x = self.in_proj(x)
+        
         for layer in self.encoder_layers:
             x = layer(x, atten_masks)
 
@@ -46,24 +57,25 @@ class Zipformer(nn.Module):
         return x
 
 
-class ZipformerEcoder(nn.Module):
+class ZipformerEncoder(nn.Module):
     def __init__(self, encoder_layers):
         super().__init__()
         self.encoder_layer = encoder_layers
 
     def forward(self, x):
+        _x = x
         for layer in self.encoder_layer:
             x = layer(x)
-        return x
+        return x + _x
 
 
 class DownsampledZipformerEncoder(nn.Module):
-    def __init__(self, encoder_layer):
+    def __init__(self, encoder_layer, d_in):
         super().__init__()
         self.encoder_layer = encoder_layer
         self.downsample = Downsample(downsample_factor=2)
         self.upsample = Upsample(upsample_factor=2)
-        self.bypass = ByPass(emb_dim=512, skip_rate=0.1, straight_through_rate=0.1)
+        self.bypass = ByPass(emb_dim=d_in, skip_rate=0.1, straight_through_rate=0.1)
 
     def forward(self, x, atten_masks=None):
         x = self.downsample(x)
@@ -111,35 +123,50 @@ class Upsample(nn.Module):
         return src
 
 
-def conv_embedding(self, in_channels, out_channels, kernel_size=3, padding=1, stride=1):
-    return nn.Sequential(
-        conv_2d(
-            in_channels=in_channels,
-            out_channels=out_channels // 16,
-            kernel_size=kernel_size,
-            padding=padding,
-            stride=(1, 2),
-        ),
-        nn.ReLU(),
-        conv_2d(
-            in_channels=in_channels,
-            out_channels=out_channels // 4,
-            kernel_size=kernel_size,
-            padding=padding,
-            stride=(2, 2),
-        ),
-        nn.ReLU(),
-        conv_2d(
-            in_channels=in_channels,
-            out_channels=out_channels,
-            kernel_size=kernel_size,
-            padding=padding,
-            stride=(1, 2),
-        ),
-    )
+class ConvolutionalEmbedding(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size=3, padding=1, stride=1):
+        super().__init__()
+        self.conv_emb = nn.Sequential(
+            conv_2d(
+                in_channels=in_channels,
+                out_channels=8,
+                kernel_size=kernel_size,
+                padding=padding,
+                stride=(1, 2),
+            ),
+            nn.ReLU(),
+            conv_2d(
+                in_channels=8,
+                out_channels=32,
+                kernel_size=kernel_size,
+                padding=padding,
+                stride=(2, 2),
+            ),
+            nn.ReLU(),
+            conv_2d(
+                in_channels=32,
+                out_channels=128,
+                kernel_size=kernel_size,
+                padding=padding,
+                stride=(1, 2),
+            ),
+        )
+
+        self.out_proj = nn.Linear(128, out_channels)
+        self.bias_norm = BiasNorm(out_channels)
+
+    def forward(self, x):
+        # x -> (batch, time, channels)
+        x = x.permute(0, 2, 1)  # (batch, channels, time)
+        x = self.conv_emb(x)
+        x = x.permute(0, 2, 1)  # (batch, time, channels)
+        x = self.out_proj(x)
+
+        x = self.bias_norm(x)
+        return x
 
 
-def conv_2d(self, in_channels, out_channels, kernel_size=3, padding=1, stride=1):
+def conv_2d(in_channels, out_channels, kernel_size=3, padding=1, stride=1):
     return nn.Conv2d(
         in_channels=in_channels,
         out_channels=out_channels,
@@ -150,17 +177,15 @@ def conv_2d(self, in_channels, out_channels, kernel_size=3, padding=1, stride=1)
 
 
 class ZipformerBlock(nn.Module):
-    def __init__(self):
+    def __init__(self, d_in, d_out, pos_emb, num_heads):
         super().__init__()
         self.feed_forward_1 = ZipformerFeedForward()
         self.non_linear_attention = NonLinearAttention()
         self.self_attention_1 = RelativePositionalMultiHeadAttention(
-            d_in=512, d_out=512, d_v_out=512
+            d_in=d_in, d_out=d_out, d_v_out=pos_emb, num_heads=num_heads
         )
-        
-        self.convolution_1 = Convolution(
-            channels=512, kernel_size=3
-        )
+
+        self.convolution_1 = Convolution(channels=512, kernel_size=3)
 
         self.feed_forward_2 = ZipformerFeedForward()
         self.bypass_1 = ByPass(emb_dim=512, skip_rate=0.1, straight_through_rate=0.1)
@@ -170,9 +195,7 @@ class ZipformerBlock(nn.Module):
         self.bias_norm = BiasNorm(512)
         self.bypass_2 = ByPass(emb_dim=512, skip_rate=0.1, straight_through_rate=0.1)
 
-        self.convolution_2 = Convolution(
-            channels=512, kernel_size=3
-        )
+        self.convolution_2 = Convolution(channels=512, kernel_size=3)
 
     def forward(self, x, atten_masks=None):
         atten_weights = self.self_attention_1(x)
@@ -186,9 +209,9 @@ class ZipformerBlock(nn.Module):
         x = self.feed_forward_2(x)
         x = self.bypass_1(x, c)
         x = self.self_attention_2(x)
-        
+
         x = self.convolution_2(x)
-        
+
         x = self.feed_forward_3(x)
 
         x = self.bias_norm(x)
@@ -272,7 +295,15 @@ of SelfAttention and concatenating their outputs."""
 
 
 class RelativePositionalMultiHeadAttention(nn.Module):
-    def __init__(self, d_in, d_out, num_heads, q_head_dim, pos_head_dim, pos_emb_skip_rate: FloatLike = ScheduledFloat([(0, 0.5), (4000, 0)])):
+    def __init__(
+        self,
+        d_in,
+        d_out,
+        num_heads,
+        q_head_dim,
+        pos_head_dim,
+        pos_emb_skip_rate: FloatLike = ScheduledFloat([(0, 0.5), (4000, 0)]),
+    ):
         super().__init__()
         self.num_heads = num_heads
         self.d_in = d_in
