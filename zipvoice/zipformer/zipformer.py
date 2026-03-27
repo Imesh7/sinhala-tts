@@ -17,9 +17,11 @@ class Zipformer(nn.Module):
         d_in,
         d_out,
         down_sample_factor: List[int] = [1, 2, 4, 2, 1],
-        encoder_dim=384,
-        num_heads=4,
-        pos_dim=48,
+        encoder_dim: int = 384,
+        num_heads: int = 4,
+        pos_dim: int = 48,
+        q_head_dim: int = 32,
+        v_head_dim: int = 12,
     ):
         super(Zipformer, self).__init__()
         self.conv_emb = ConvolutionalEmbedding(
@@ -34,7 +36,10 @@ class Zipformer(nn.Module):
 
         for i in range(num_encoder_layers):
             zipformer_block = ZipformerBlock(
-                d_in=d_in, d_out=d_out,pos_emb=pos_dim, num_heads=num_heads
+                d_in=d_in,
+                d_out=d_out,
+                pos_emb=pos_dim,
+                num_heads=num_heads,
             )
             encoder = ZipformerEncoder(zipformer_block)
 
@@ -48,7 +53,7 @@ class Zipformer(nn.Module):
     def forward(self, x, atten_masks=None):
         x = x.permute(1, 0, 2)
         x = self.in_proj(x)
-        
+
         for layer in self.encoder_layers:
             x = layer(x, atten_masks)
 
@@ -177,19 +182,23 @@ def conv_2d(in_channels, out_channels, kernel_size=3, padding=1, stride=1):
 
 
 class ZipformerBlock(nn.Module):
-    def __init__(self, d_in, d_out, pos_emb, num_heads):
+    def __init__(self, d_in, d_out, pos_emb, num_heads, q_head_dim, v_head_dim):
         super().__init__()
         self.feed_forward_1 = ZipformerFeedForward()
         self.non_linear_attention = NonLinearAttention()
         self.self_attention_1 = RelativePositionalMultiHeadAttention(
-            d_in=d_in, d_out=d_out, d_v_out=pos_emb, num_heads=num_heads
+            d_in=d_in,
+            d_out=d_out,
+            d_v_out=pos_emb,
+            num_heads=num_heads,
+            q_head_dim=q_head_dim,
         )
 
         self.convolution_1 = Convolution(channels=512, kernel_size=3)
 
         self.feed_forward_2 = ZipformerFeedForward()
         self.bypass_1 = ByPass(emb_dim=512, skip_rate=0.1, straight_through_rate=0.1)
-        self.self_attention_2 = SelfAttention(d_in=512, d_out=512, d_v_out=512)
+        self.self_attention_2 = SelfAttention(d_in=emb, d_out=512, d_v_out=v_head_dim)
 
         self.feed_forward_3 = ZipformerFeedForward()
         self.bias_norm = BiasNorm(512)
@@ -272,26 +281,32 @@ class NonLinearAttention(nn.Module):
 
 
 class SelfAttention(nn.Module):
-    def __init__(self, d_in, d_out, d_v_out):
+    def __init__(self, emb_dim, num_heads, v_head_dim):
         super().__init__()
-        self.q = nn.Linear(d_in, d_out)
-        self.k = nn.Linear(d_in, d_out)
-        self.v = nn.Linear(d_in, d_v_out)
+        self.in_proj = nn.Linear(emb_dim, num_heads * v_head_dim, bias=True)
+        self.out_proj = nn.Linear(num_heads * v_head_dim, emb_dim, bias=True)
 
-    def forward(self, x):
-        q = self.q(x)
-        k = self.k(x)
-        v = self.v(x)
+    def forward(self, x: Tensor, atten_weights: Tensor):
+        (seq_len, batch_size, emb_dim) = x.shape
+        num_heads = atten_weights.shape[0]
+        x = self.in_proj(x)
 
-        attn_weights = torch.matmul(q, k.transpose(-2, -1)) / (512**0.5)
-        attn_weights = torch.softmax(attn_weights, dim=-1)
+        x = x.reshape(seq_len, batch_size, num_heads, -1).permute(2, 1, 0, 3)
+        x = torch.matmul(x, atten_weights)
+        value_head_dim = x.shape[-1]
 
-        output = torch.matmul(attn_weights, v)
-        return output
+        x = (
+            x.permute(2, 1, 0, 3)
+            .contiguous()
+            .view(seq_len, batch_size, num_heads * value_head_dim)
+        )
+
+        x = self.out_proj(x)
+        return x
 
 
-"""Multi-Head Attention can be implemented by creating multiple instances 
-of SelfAttention and concatenating their outputs."""
+"""Relative Positional Multi-Head Attention can be implemented 
+3x -> chunk & calculate attention  their outputs."""
 
 
 class RelativePositionalMultiHeadAttention(nn.Module):

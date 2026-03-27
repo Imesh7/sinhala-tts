@@ -23,12 +23,25 @@ class ZipVoice(nn.Module):
         v_head_dim: int = 12,
     ):
         super(ZipVoice, self).__init__()
+
         self.text_encoder = Zipformer(
-            text_emb_dim, feat_dim, down_sample_factors, text_encoder_dim
+            text_emb_dim,
+            feat_dim,
+            down_sample_factors,
+            text_encoder_dim,
+            pos_dim=pos_dim,
+            q_head_dim=q_head_dim,
+            v_head_dim=v_head_dim
         )
 
         self.vector_field_estimator = Zipformer(
-            feat_dim * 3, feat_dim, down_sample_factors, encoder_dim
+            feat_dim * 3,
+            feat_dim,
+            down_sample_factors,
+            encoder_dim,
+            pos_dim=pos_dim,
+            q_head_dim=q_head_dim,
+            v_head_dim=v_head_dim,
         )
 
     def forward(self, x: List[List[int]], features: torch.Tensor, noise, t: int):
