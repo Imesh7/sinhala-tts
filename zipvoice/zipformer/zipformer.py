@@ -108,17 +108,6 @@ class Upsample(nn.Module):
         return src
 
 
-# class ZipformerWrapper(nn.Module):
-#     def __init__(self):
-#         super().__init__()
-#         self.upsample = nn.Upsample(scale_factor=2, mode='nearest')
-#         self.zipformer = Zipformer()
-#         self.downsample = nn.MaxPool2d(kernel_size=2, stride=2)
-
-#     def forward(self, x):
-#         return self.zipformer(x)
-
-
 def conv_embedding(self, in_channels, out_channels, kernel_size=3, padding=1, stride=1):
     return nn.Sequential(
         conv_2d(
@@ -165,15 +154,22 @@ class ZipformerBlock(nn.Module):
         self.self_attention_1 = RelativePositionalMultiHeadAttention(
             d_in=512, d_out=512, d_v_out=512
         )
-        self.convolution_1 = convolution()
+        
+        self.convolution_1 = Convolution(
+            channels=512, kernel_size=3
+        )
 
         self.feed_forward_2 = ZipformerFeedForward()
         self.bypass_1 = ByPass(emb_dim=512, skip_rate=0.1, straight_through_rate=0.1)
         self.self_attention_2 = SelfAttention(d_in=512, d_out=512, d_v_out=512)
-        self.convolution_2 = convolution()
+
         self.feed_forward_3 = ZipformerFeedForward()
         self.bias_norm = BiasNorm(512)
         self.bypass_2 = ByPass(emb_dim=512, skip_rate=0.1, straight_through_rate=0.1)
+
+        self.convolution_2 = Convolution(
+            channels=512, kernel_size=3
+        )
 
     def forward(self, x, atten_masks=None):
         atten_weights = self.self_attention_1(x)
@@ -182,12 +178,14 @@ class ZipformerBlock(nn.Module):
         x = self.non_linear_attention(x, atten_weights)
         x = self.self_attention_1(x, atten_weights)
 
-        # conv
+        x = self.convolution_1(x)
 
         x = self.feed_forward_2(x)
         x = self.bypass_1(x, c)
         x = self.self_attention_2(x)
-        # conv
+        
+        x = self.convolution_2(x)
+        
         x = self.feed_forward_3(x)
 
         x = self.bias_norm(x)
@@ -399,3 +397,34 @@ class LimitParamValue(torch.autograd.Function):
         """
         x_grad *= torch.where(torch.logical_and(x_grad < 0, x > ctx.max), -1.0, 1.0)
         return x_grad, None, None
+
+
+class Convolution(nn.Module):
+    def __init__(self, channels, kernel_size=3, padding=1, stride=1):
+        super().__init__()
+        self.in_proj = nn.Linear(channels, 2 * channels)
+        self.sigmoid = nn.Sigmoid()
+
+        self.depthwise_conv = nn.Conv1d(
+            channels,
+            channels,
+            kernel_size,
+            padding=kernel_size // 2,
+            groups=channels,
+        )
+        self.out_proj = nn.Linear(channels, channels)
+
+    def forward(self, x):
+
+        # x -> (time, batch, channels)
+        x = self.in_proj(x)
+
+        x, y = x.chunk(2, dim=-1)
+        x = x * self.sigmoid(y)
+
+        x = x.permute(1, 2, 0)  # (batch, channels, time)
+        x = self.depthwise_conv(x)
+        x = x.permute(2, 0, 1)
+
+        x = self.out_proj(x)
+        return x
