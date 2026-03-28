@@ -11,3 +11,10 @@ uv pip install package_name
 ```
 uv add package_name
 ```
+
+
+Install vocos vocoder
+
+```
+pip install vocos
+```

@@ -13,7 +13,6 @@ class ZipVoice(nn.Module):
     def __init__(
         self,
         down_sample_factors=[1, 2, 4, 2, 1],
-        d_in: int = 192,
         feat_dim: int = 100,
         text_emb_dim: int = 192,
         text_encoder_dim: int = 192,
@@ -31,7 +30,7 @@ class ZipVoice(nn.Module):
             text_encoder_dim,
             pos_dim=pos_dim,
             q_head_dim=q_head_dim,
-            v_head_dim=v_head_dim
+            v_head_dim=v_head_dim,
         )
 
         self.vector_field_estimator = Zipformer(
