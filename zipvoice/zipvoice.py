@@ -24,20 +24,20 @@ class ZipVoice(nn.Module):
         super(ZipVoice, self).__init__()
 
         self.text_encoder = Zipformer(
-            feat_dim,
-            text_emb_dim,
-            down_sample_factors,
-            text_encoder_dim,
+            d_in=feat_dim,
+            d_out=text_emb_dim,
+            downsampling_factor=1,
+            encoder_dim=text_encoder_dim,
             pos_dim=pos_dim,
             q_head_dim=q_head_dim,
             v_head_dim=v_head_dim,
         )
 
         self.vector_field_estimator = Zipformer(
-            feat_dim * 3,
-            feat_dim,
-            down_sample_factors,
-            encoder_dim,
+            d_in=feat_dim * 3,
+            d_out=feat_dim,
+            downsampling_factor=down_sample_factors,
+            encoder_dim=encoder_dim,
             pos_dim=pos_dim,
             q_head_dim=q_head_dim,
             v_head_dim=v_head_dim,

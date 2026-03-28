@@ -22,6 +22,7 @@ class Zipformer(nn.Module):
         pos_dim: int = 48,
         q_head_dim: int = 32,
         v_head_dim: int = 12,
+        pos_head_dim: int = 4,
     ):
         super(Zipformer, self).__init__()
         self.conv_emb = ConvolutionalEmbedding(
@@ -40,12 +41,17 @@ class Zipformer(nn.Module):
                 pos_emb=pos_dim,
                 num_heads=num_heads,
                 q_head_dim=q_head_dim,
-                v_head_dim=v_head_dim
+                v_head_dim=v_head_dim,
+                pos_head_dim=pos_head_dim,
             )
             encoder = ZipformerEncoder(zipformer_block)
 
             if down_sample_factor[i] > 1:
-                downsampled_encoder = DownsampledZipformerEncoder(encoder_layer=encoder)
+                downsampled_encoder = DownsampledZipformerEncoder(
+                    encoder_layer=encoder,
+                    dim=encoder_dim,
+                    downsample=down_sample_factor[i],
+                )
 
             encoder_layer.append(downsampled_encoder)
 
@@ -76,12 +82,13 @@ class ZipformerEncoder(nn.Module):
 
 
 class DownsampledZipformerEncoder(nn.Module):
-    def __init__(self, encoder_layer, d_in):
+    def __init__(self, encoder_layer, dim, downsample):
         super().__init__()
+        self.downsample_factor = downsample
         self.encoder_layer = encoder_layer
-        self.downsample = Downsample(downsample_factor=2)
-        self.upsample = Upsample(upsample_factor=2)
-        self.bypass = ByPass(emb_dim=d_in, skip_rate=0.1, straight_through_rate=0.1)
+        self.downsample = Downsample(downsample_factor=downsample)
+        self.upsample = Upsample(upsample_factor=downsample)
+        self.bypass = ByPass(emb_dim=dim, skip_rate=0.1, straight_through_rate=0.1)
 
     def forward(self, x, atten_masks=None):
         x = self.downsample(x)
@@ -183,31 +190,41 @@ def conv_2d(in_channels, out_channels, kernel_size=3, padding=1, stride=1):
 
 
 class ZipformerBlock(nn.Module):
-    def __init__(self, emb_dim, pos_emb, num_heads, q_head_dim, v_head_dim):
+    def __init__(
+        self, emb_dim, pos_emb, num_heads, q_head_dim, v_head_dim, pos_head_dim
+    ):
         super().__init__()
-        self.feed_forward_1 = ZipformerFeedForward()
-        self.non_linear_attention = NonLinearAttention(channels=emb_dim, hidden_channels=(3 * emb_dim) // 4)
-        self.self_attention_1 = RelativePositionalMultiHeadAttention(
-            d_in=emb_dim,
-            d_v_out=pos_emb,
+        self.self_atten_weights = RelativePositionalMultiHeadAttention(
+            emb_dim=emb_dim,
             num_heads=num_heads,
             q_head_dim=q_head_dim,
+            pos_head_dim=pos_head_dim,
+        )
+        
+        self.feed_forward_1 = ZipformerFeedForward()
+        self.non_linear_attention = NonLinearAttention(
+            channels=emb_dim, hidden_channels=(3 * emb_dim) // 4
         )
 
+        self.self_attention_1 = SelfAttention(emb_dim=emb_dim, num_heads=num_heads, v_head_dim=v_head_dim)
         self.convolution_1 = Convolution(channels=emb_dim, kernel_size=3)
 
         self.feed_forward_2 = ZipformerFeedForward()
-        self.bypass_1 = ByPass(emb_dim=emb_dim, skip_rate=0.1, straight_through_rate=0.1)
-        self.self_attention_2 = SelfAttention(emb_dim=emb_dim, d_v_out=v_head_dim)
+        self.bypass_1 = ByPass(
+            emb_dim=emb_dim, skip_rate=0.5, straight_through_rate=0.1
+        )
+        self.self_attention_2 = SelfAttention(emb_dim=emb_dim, num_heads=num_heads, v_head_dim=v_head_dim)
 
         self.feed_forward_3 = ZipformerFeedForward()
         self.bias_norm = BiasNorm(emb_dim)
-        self.bypass_2 = ByPass(emb_dim=emb_dim, skip_rate=0.1, straight_through_rate=0.1)
+        self.bypass_2 = ByPass(
+            emb_dim=emb_dim, straight_through_rate=0.1
+        )
 
         self.convolution_2 = Convolution(channels=emb_dim, kernel_size=3)
 
     def forward(self, x, atten_masks=None):
-        atten_weights = self.self_attention_1(x)
+        atten_weights = self.self_atten_weights(x)
 
         x = x + self.feed_forward_1(x)
         x = x + self.non_linear_attention(x, atten_weights)
@@ -263,23 +280,23 @@ class NonLinearAttention(nn.Module):
         self.tanh = nn.Tanh()
         self.out_proj = nn.Linear(hidden_channels, channels, bias=True)
 
-    def forward(self, x : Tensor, atten_weights : Tensor=None):
+    def forward(self, x: Tensor, atten_weights: Tensor = None):
         x = self.in_proj(x)
-        (seq_len, batch_size, _) =  x.shape
-        
+        (seq_len, batch_size, _) = x.shape
+
         s, x, y = x.chunk(3, dim=2)
         s = self.tanh(s)
-        
+
         s = s.unsqueeze(-1).reshape(seq_len, batch_size, self.hidden_channels)
         x = x * s
-        
+
         (seq_len, batch_size, embed_dim) = x.shape
         num_heads = atten_weights.shape[0]
         x = x.reshape(seq_len, batch_size, num_heads, -1).permute(2, 1, 0, 3)
-        x = torch.matmul(x,  atten_weights)
-        
+        x = torch.matmul(x, atten_weights)
+
         x = x.permute(2, 1, 0, 3).reshape(seq_len, batch_size, -1)
-        
+
         x = x * y
         x = self.out_proj(x)
         return x
