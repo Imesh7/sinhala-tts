@@ -7,6 +7,7 @@ import torch.nn as nn
 import random
 from torch import Tensor
 
+from zipvoice.utils.common import _to_tuple, to_tuple
 from zipvoice.zipformer.biasnorm import BiasNorm
 from zipvoice.zipformer.scaling import FloatLike, ScheduledFloat
 from zipvoice.zipformer.swosh_activation import Swoosh
@@ -27,6 +28,7 @@ class Zipformer(nn.Module):
         d_in,
         d_out,
         down_sample_factor: Union[int, Tuple[int]] = (2, 4),
+        num_encoder_layers: Union[int, Tuple[int]] = 4,
         encoder_dim: int = 384,
         num_heads: int = 4,
         pos_dim: int = 48,
@@ -41,14 +43,17 @@ class Zipformer(nn.Module):
         self.conv_emb = ConvolutionalEmbedding(
             in_channels=d_in, out_channels=encoder_dim
         )
+        
+        num_encoder_layers = to_tuple(num_encoder_layers, down_sample_factor)
+        self.num_encoder_layers = num_encoder_layers
 
         self.in_proj = nn.Linear(d_in, encoder_dim)
         self.out_proj = nn.Linear(encoder_dim, d_out)
 
         encoder_layer = []
-        num_encoder_layers = len(down_sample_factor)
+        num_encoders = len(down_sample_factor)
 
-        for i in range(num_encoder_layers):
+        for i in range(num_encoders):
             zipformer_block = ZipformerBlock(
                 encoder_dim=encoder_dim,
                 pos_emb=pos_dim,
@@ -61,7 +66,8 @@ class Zipformer(nn.Module):
                 zipformer_block,
                 encoder_dim=encoder_dim,
                 pos_emb=pos_dim,
-                time_emb_dim=time_emb_dim
+                time_emb_dim=time_emb_dim,
+                num_layers=num_encoder_layers[i]
             )
 
             if down_sample_factor[i] > 1:
@@ -81,7 +87,7 @@ class Zipformer(nn.Module):
             nn.Linear(2 * time_emb_dim, time_emb_dim),
         )
 
-    def forward(self, x: Tensor, t: Tensor = None, device: torch.device = None):
+    def forward(self, x: Tensor, device: torch.device, t: Tensor = None):
         if t is not None:
             time_emb = time_embedding(t, x.size(-1)).to(device)
             time_emb = self.time_emb(time_emb)
@@ -90,10 +96,10 @@ class Zipformer(nn.Module):
 
         x = x.permute(1, 0, 2)
         x = self.in_proj(x)
-        atten_masks = None
+        atten_mask = None
 
         for layer in self.encoder_layers:
-            x = layer(x, time_emb, atten_masks=atten_masks)
+            x = layer(x, time_emb, atten_mask=atten_mask, device=device)
 
         x = self.out_proj(x)
         x = x.permute(1, 0, 2)
@@ -103,37 +109,39 @@ class Zipformer(nn.Module):
 class ZipformerEncoder(nn.Module):
     def __init__(
         self,
-        encoder_layers,
+        encoder_layer: nn.Module,
         encoder_dim:int,
         pos_emb,
         time_emb_dim,
-        max_len=1000,
+        num_layers: int,
     ):
         super().__init__()
-        self.encoder_layer = encoder_layers
+        self.encoder_layer = nn.ModuleList(
+            [copy.deepcopy(encoder_layer) for i in range(num_layers)]
+        )
         self.rela_emb_dim = RelativePositionalEmbedding(
-            max_seq_len=max_len, emb_dim=pos_emb
+            emb_dim=pos_emb
         )
         self.time_embeding = nn.Sequential(
             nn.ReLU(),
             nn.Linear(time_emb_dim, encoder_dim),
         )
 
-    def forward(self, x: Tensor, time_emb: Tensor = None):
+    def forward(self, x: Tensor, time_emb: Tensor = None, atten_mask: Tensor = None):
 
-        pos_emb = self.rela_emb_dim(x.size(0))
+        pos_emb = self.rela_pos(x)
 
         if time_emb is not None:
             time_emb = self.time_embeding(time_emb)
 
         for layer in self.encoder_layer:
-            x = layer(x, pos_emb, time_emb=time_emb)
+            x = layer(x, pos_emb, time_emb=time_emb, atten_mask=atten_mask)
 
         return x
 
 
 class DownsampledZipformerEncoder(nn.Module):
-    def __init__(self, encoder_layer, dim : int, downsample):
+    def __init__(self, encoder_layer : nn.Module, dim : int, downsample):
         super().__init__()
         self.downsample_factor = downsample
         self.encoder_layer = encoder_layer
@@ -141,9 +149,9 @@ class DownsampledZipformerEncoder(nn.Module):
         self.upsample = Upsample(upsample_factor=downsample)
         self.bypass = ByPass(dim=dim, skip_rate=0.1, straight_through_rate=0.1)
 
-    def forward(self, x, atten_masks=None):
+    def forward(self, x: torch.Tensor, atten_mask=None):
         x = self.downsample(x)
-        x = self.encoder_layer(x, atten_masks)
+        x = self.encoder_layer(x, atten_mask=atten_mask)
         x = self.upsample(x)
 
         return self.bypass(x)
@@ -276,7 +284,7 @@ class ZipformerBlock(nn.Module):
 
         self.convolution_2 = Convolution(channels=encoder_dim, kernel_size=3)
 
-    def forward(self, x: Tensor, time_emb: Tensor = None, atten_masks=None):
+    def forward(self, x: Tensor, time_emb: Tensor = None, atten_mask=None):
         atten_weights = self.self_atten_weights(x)
 
         if time_emb is not None:
@@ -486,7 +494,6 @@ class ByPass(nn.Module):
 
 
 
-
 def limit_param_value(x: torch.Tensor, prob: float, trainning: bool):
     if trainning and random.random() < prob:
         return LimitParamValue.apply()
@@ -553,21 +560,20 @@ class Convolution(nn.Module):
 
 
 class RelativePositionalEmbedding(nn.Module):
-    def __init__(self, emb_dim, max_seq_len: int = 1000):
+    def __init__(self, emb_dim : int, max_seq_len: int = 1000):
         super().__init__()
         self.emb_dim = emb_dim
         self.max_seq_len = max_seq_len
         self.pos_embedding = nn.Embedding(2 * max_seq_len - 1, emb_dim)
         self.dropout = nn.Dropout(0.1)
 
-    def forward(self, seq_len):
-        positions = torch.arange(-seq_len + 1, seq_len).to(
-            self.pos_embedding.weight.device
-        )
+    def forward(self, x : Tensor, device: torch.device):
+        seq_len = x.size(0)
+        positions = torch.arange(-seq_len + 1, seq_len).to(device)
 
         indices = positions + self.max_seq_len - 1
         indices = torch.clamp(indices, 0, 2 * self.max_seq_len - 2)
 
-        pos_emb = self.pos_embedding(positions)
+        pos_emb = self.pos_embedding(indices)
         pos_emb = self.dropout(pos_emb)
         return pos_emb

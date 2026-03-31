@@ -12,7 +12,8 @@ import math
 class ZipVoice(nn.Module):
     def __init__(
         self,
-        down_sample_factors=[1, 2, 4, 2, 1],
+        down_sample_factors: List[int] = [1, 2, 4, 2, 1],
+        vector_field_estimator_num_layers: List[int] = [2, 2, 4, 4, 4],
         feat_dim: int = 100,
         text_emb_dim: int = 192,
         text_encoder_dim: int = 192,
@@ -21,6 +22,7 @@ class ZipVoice(nn.Module):
         q_head_dim: int = 32,
         v_head_dim: int = 12,
         vocab_size: int = 754,
+        text_encoder_num_layers: int = 4,
     ):
         super(ZipVoice, self).__init__()
 
@@ -28,6 +30,7 @@ class ZipVoice(nn.Module):
             d_in=text_emb_dim,
             d_out=feat_dim,
             down_sample_factor=1,
+            num_encoder_layers=text_encoder_num_layers,
             encoder_dim=text_encoder_dim,
             pos_dim=pos_dim,
             q_head_dim=q_head_dim,
@@ -38,6 +41,7 @@ class ZipVoice(nn.Module):
             d_in=feat_dim * 3,
             d_out=feat_dim,
             down_sample_factor=down_sample_factors,
+            num_encoder_layers=vector_field_estimator_num_layers,
             encoder_dim=encoder_dim,
             pos_dim=pos_dim,
             q_head_dim=q_head_dim,
