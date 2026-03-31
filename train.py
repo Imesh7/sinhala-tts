@@ -106,6 +106,7 @@ def train():
             outputs = model(
                 text_tokens, features, feature_lens, noise, t=t, device=device
             )  # Forward pass with noise
+            
             loss_val = loss(outputs, mel_spec)
             optimizer.zero_grad()
             loss_val.backward()

@@ -60,7 +60,7 @@ class ZipVoice(nn.Module):
         device: torch.device,
     ) -> torch.Tensor:
 
-        emb = self.text_encode(tokens=tokens, device=device, t=t)
+        emb = self.text_encode(tokens=tokens, t=t, device=device)
 
         text_cond = self.text_conditioning(
             text_emb=emb,
@@ -88,8 +88,8 @@ class ZipVoice(nn.Module):
     def text_encode(
         self,
         tokens: List[List[int]],
-        device: torch.device,
         t: torch.Tensor = None,
+        device: torch.device= None,
     ):
         x = self.emb(torch.tensor(tokens, dtype=torch.int64).to(device))
         x = self.text_encoder(x=x, t=t, device=device)

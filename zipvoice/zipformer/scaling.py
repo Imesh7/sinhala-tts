@@ -1,17 +1,24 @@
 
 from typing import Union
 
+from torch import nn
 
-class ScheduledFloat:
-    def __init__(self, schedule=None):
+
+class ScheduledFloat(nn.Module):
+    def __init__(self, schedule=None, default=0.0):
+        super().__init__()
         self.schedule = schedule
         self.batch_size = None
+        self.default = default
 
     def __float__(self):
-        for step, value in self.schedule:
-            if step > self._get_current_step():
-                return value
-        return self.schedule[-1][1]
+        if not self.training or self.schedule is None:
+            return float(self.default)
+        else:
+            for step, value in self.schedule:
+                if step > self._get_current_step():
+                    return float(value)
+            return float(self.schedule[-1][1])
 
     def _get_current_step(self):
         # Implement logic to get the current training step

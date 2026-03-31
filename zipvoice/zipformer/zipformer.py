@@ -43,7 +43,7 @@ class Zipformer(nn.Module):
         self.conv_emb = ConvolutionalEmbedding(
             in_channels=d_in, out_channels=encoder_dim
         )
-        
+
         num_encoder_layers = to_tuple(num_encoder_layers, down_sample_factor)
         self.num_encoder_layers = num_encoder_layers
 
@@ -67,7 +67,7 @@ class Zipformer(nn.Module):
                 encoder_dim=encoder_dim,
                 pos_emb=pos_dim,
                 time_emb_dim=time_emb_dim,
-                num_layers=num_encoder_layers[i]
+                num_layers=num_encoder_layers[i],
             )
 
             if down_sample_factor[i] > 1:
@@ -87,7 +87,7 @@ class Zipformer(nn.Module):
             nn.Linear(2 * time_emb_dim, time_emb_dim),
         )
 
-    def forward(self, x: Tensor, device: torch.device, t: Tensor = None):
+    def forward(self, x: Tensor, t: Tensor = None, device: torch.device = None):
         if t is not None:
             time_emb = time_embedding(t, x.size(-1)).to(device)
             time_emb = self.time_emb(time_emb)
@@ -99,7 +99,7 @@ class Zipformer(nn.Module):
         atten_mask = None
 
         for layer in self.encoder_layers:
-            x = layer(x, time_emb, atten_mask=atten_mask, device=device)
+            x = layer(x, time_emb=time_emb, atten_mask=atten_mask, device=device)
 
         x = self.out_proj(x)
         x = x.permute(1, 0, 2)
@@ -110,26 +110,30 @@ class ZipformerEncoder(nn.Module):
     def __init__(
         self,
         encoder_layer: nn.Module,
-        encoder_dim:int,
-        pos_emb,
-        time_emb_dim,
+        encoder_dim: int,
+        pos_dim: int,
         num_layers: int,
+        time_embed_dim: int,
     ):
         super().__init__()
         self.encoder_layer = nn.ModuleList(
             [copy.deepcopy(encoder_layer) for i in range(num_layers)]
         )
-        self.rela_emb_dim = RelativePositionalEmbedding(
-            emb_dim=pos_emb
-        )
+        self.rela_pos_emb = RelativePositionalEmbedding(emb_dim=pos_dim)
         self.time_embeding = nn.Sequential(
             nn.ReLU(),
-            nn.Linear(time_emb_dim, encoder_dim),
+            nn.Linear(time_embed_dim, encoder_dim),
         )
 
-    def forward(self, x: Tensor, time_emb: Tensor = None, atten_mask: Tensor = None):
+    def forward(
+        self,
+        x: Tensor,
+        time_emb: Tensor = None,
+        atten_mask: Tensor = None,
+        device: torch.device = None,
+    ):
 
-        pos_emb = self.rela_pos(x)
+        pos_emb = self.rela_pos_emb(x, device=device)
 
         if time_emb is not None:
             time_emb = self.time_embeding(time_emb)
@@ -141,7 +145,7 @@ class ZipformerEncoder(nn.Module):
 
 
 class DownsampledZipformerEncoder(nn.Module):
-    def __init__(self, encoder_layer : nn.Module, dim : int, downsample):
+    def __init__(self, encoder_layer: nn.Module, dim: int, downsample:int):
         super().__init__()
         self.downsample_factor = downsample
         self.encoder_layer = encoder_layer
@@ -149,9 +153,9 @@ class DownsampledZipformerEncoder(nn.Module):
         self.upsample = Upsample(upsample_factor=downsample)
         self.bypass = ByPass(dim=dim, skip_rate=0.1, straight_through_rate=0.1)
 
-    def forward(self, x: torch.Tensor, atten_mask=None):
+    def forward(self, x: torch.Tensor, time_emb: Tensor = None, atten_mask=None):
         x = self.downsample(x)
-        x = self.encoder_layer(x, atten_mask=atten_mask)
+        x = self.encoder_layer(x, time_emb, atten_mask=atten_mask)
         x = self.upsample(x)
 
         return self.bypass(x)
@@ -250,14 +254,16 @@ def conv_2d(in_channels, out_channels, kernel_size=3, padding=1, stride=1):
 
 class ZipformerBlock(nn.Module):
     def __init__(
-        self, encoder_dim: int, pos_emb, num_heads, q_head_dim, v_head_dim, pos_head_dim
+        self, encoder_dim: int, pos_dim: int, num_heads: int, q_head_dim: int, v_head_dim: int, pos_head_dim: int
     ):
         super().__init__()
+        print("Initializing ZipformerBlock with encoder_dim:", encoder_dim)
         self.self_atten_weights = RelativePositionalMultiHeadAttention(
             emb_dim=encoder_dim,
             num_heads=num_heads,
             q_head_dim=q_head_dim,
             pos_head_dim=pos_head_dim,
+            pos_dim=pos_dim
         )
 
         self.feed_forward_1 = ZipformerFeedForward()
@@ -284,11 +290,18 @@ class ZipformerBlock(nn.Module):
 
         self.convolution_2 = Convolution(channels=encoder_dim, kernel_size=3)
 
-    def forward(self, x: Tensor, time_emb: Tensor = None, atten_mask=None):
-        atten_weights = self.self_atten_weights(x)
+    def forward(
+        self,
+        x: Tensor,
+        pos_emb: Tensor,
+        time_emb: Tensor = None,
+        atten_mask=None,
+        device: torch.device = None,
+    ):
+        atten_weights = self.self_atten_weights(x, pos_emb)
 
         if time_emb is not None:
-            src = src + time_emb
+            x = x + time_emb
 
         x = x + self.feed_forward_1(x)
         x = x + self.non_linear_attention(x, atten_weights)
@@ -298,7 +311,7 @@ class ZipformerBlock(nn.Module):
 
         x = x + self.feed_forward_2(x)
         x = self.bypass_1(x, c)
-        x = x + self.self_attention_2(x)
+        x = x + self.self_attention_2(x, atten_weights)
 
         x = x + self.convolution_2(x)
 
@@ -399,6 +412,7 @@ class RelativePositionalMultiHeadAttention(nn.Module):
     def __init__(
         self,
         emb_dim,
+        pos_dim,
         num_heads,
         q_head_dim,
         pos_head_dim,
@@ -412,7 +426,7 @@ class RelativePositionalMultiHeadAttention(nn.Module):
         self.pos_head_dim = pos_head_dim
         self.pos_emb_skip_rate = copy.deepcopy(pos_emb_skip_rate)
 
-        d_out_dim = (emb_dim + k_head_dim + pos_head_dim) // num_heads
+        d_out_dim = (self.query_head_dim + k_head_dim + pos_head_dim) * num_heads
 
         self.in_proj = nn.Linear(emb_dim, d_out_dim)
 
@@ -422,7 +436,7 @@ class RelativePositionalMultiHeadAttention(nn.Module):
         output = torch.matmul(attn_weights, v)
         return output
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor, pos_emb: torch.Tensor):
         x = self.in_proj(x)
         seq_len, batch_size, d_in = x.shape
         out = self.query_head_dim * self.num_heads
@@ -492,8 +506,6 @@ class ByPass(nn.Module):
 # class BiasNorm(nn.LayerNorm):
 
 
-
-
 def limit_param_value(x: torch.Tensor, prob: float, trainning: bool):
     if trainning and random.random() < prob:
         return LimitParamValue.apply()
@@ -560,14 +572,14 @@ class Convolution(nn.Module):
 
 
 class RelativePositionalEmbedding(nn.Module):
-    def __init__(self, emb_dim : int, max_seq_len: int = 1000):
+    def __init__(self, emb_dim: int, max_seq_len: int = 1000):
         super().__init__()
         self.emb_dim = emb_dim
         self.max_seq_len = max_seq_len
         self.pos_embedding = nn.Embedding(2 * max_seq_len - 1, emb_dim)
         self.dropout = nn.Dropout(0.1)
 
-    def forward(self, x : Tensor, device: torch.device):
+    def forward(self, x: Tensor, device: torch.device):
         seq_len = x.size(0)
         positions = torch.arange(-seq_len + 1, seq_len).to(device)
 
