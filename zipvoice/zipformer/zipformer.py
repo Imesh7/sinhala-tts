@@ -36,8 +36,8 @@ class Zipformer(nn.Module):
         time_emb_dim: int = 192,
     ):
         super(Zipformer, self).__init__()
-        if isinstance(downsampling_factor, int):
-            downsampling_factor = (downsampling_factor,)
+        if isinstance(down_sample_factor, int):
+            down_sample_factor = (down_sample_factor,)
         self.conv_emb = ConvolutionalEmbedding(
             in_channels=d_in, out_channels=encoder_dim
         )
@@ -50,7 +50,7 @@ class Zipformer(nn.Module):
 
         for i in range(num_encoder_layers):
             zipformer_block = ZipformerBlock(
-                emb_dim=encoder_dim,
+                encoder_dim=encoder_dim,
                 pos_emb=pos_dim,
                 num_heads=num_heads,
                 q_head_dim=q_head_dim,
@@ -59,7 +59,7 @@ class Zipformer(nn.Module):
             )
             encoder = ZipformerEncoder(
                 zipformer_block,
-                emb_dim=encoder_dim,
+                encoder_dim=encoder_dim,
                 pos_emb=pos_dim,
                 time_emb_dim=time_emb_dim
             )
@@ -104,7 +104,7 @@ class ZipformerEncoder(nn.Module):
     def __init__(
         self,
         encoder_layers,
-        emb_dim,
+        encoder_dim:int,
         pos_emb,
         time_emb_dim,
         max_len=1000,
@@ -116,7 +116,7 @@ class ZipformerEncoder(nn.Module):
         )
         self.time_embeding = nn.Sequential(
             nn.ReLU(),
-            nn.Linear(time_emb_dim, emb_dim),
+            nn.Linear(time_emb_dim, encoder_dim),
         )
 
     def forward(self, x: Tensor, time_emb: Tensor = None):
@@ -133,13 +133,13 @@ class ZipformerEncoder(nn.Module):
 
 
 class DownsampledZipformerEncoder(nn.Module):
-    def __init__(self, encoder_layer, dim, downsample):
+    def __init__(self, encoder_layer, dim : int, downsample):
         super().__init__()
         self.downsample_factor = downsample
         self.encoder_layer = encoder_layer
         self.downsample = Downsample(downsample_factor=downsample)
         self.upsample = Upsample(upsample_factor=downsample)
-        self.bypass = ByPass(emb_dim=dim, skip_rate=0.1, straight_through_rate=0.1)
+        self.bypass = ByPass(dim=dim, skip_rate=0.1, straight_through_rate=0.1)
 
     def forward(self, x, atten_masks=None):
         x = self.downsample(x)
@@ -242,11 +242,11 @@ def conv_2d(in_channels, out_channels, kernel_size=3, padding=1, stride=1):
 
 class ZipformerBlock(nn.Module):
     def __init__(
-        self, emb_dim, pos_emb, num_heads, q_head_dim, v_head_dim, pos_head_dim
+        self, encoder_dim: int, pos_emb, num_heads, q_head_dim, v_head_dim, pos_head_dim
     ):
         super().__init__()
         self.self_atten_weights = RelativePositionalMultiHeadAttention(
-            emb_dim=emb_dim,
+            emb_dim=encoder_dim,
             num_heads=num_heads,
             q_head_dim=q_head_dim,
             pos_head_dim=pos_head_dim,
@@ -254,27 +254,27 @@ class ZipformerBlock(nn.Module):
 
         self.feed_forward_1 = ZipformerFeedForward()
         self.non_linear_attention = NonLinearAttention(
-            channels=emb_dim, hidden_channels=(3 * emb_dim) // 4
+            channels=encoder_dim, hidden_channels=(3 * encoder_dim) // 4
         )
 
         self.self_attention_1 = SelfAttention(
-            emb_dim=emb_dim, num_heads=num_heads, v_head_dim=v_head_dim
+            emb_dim=encoder_dim, num_heads=num_heads, v_head_dim=v_head_dim
         )
-        self.convolution_1 = Convolution(channels=emb_dim, kernel_size=3)
+        self.convolution_1 = Convolution(channels=encoder_dim, kernel_size=3)
 
         self.feed_forward_2 = ZipformerFeedForward()
         self.bypass_1 = ByPass(
-            emb_dim=emb_dim, skip_rate=0.5, straight_through_rate=0.1
+            dim=encoder_dim, skip_rate=0.5, straight_through_rate=0.1
         )
         self.self_attention_2 = SelfAttention(
-            emb_dim=emb_dim, num_heads=num_heads, v_head_dim=v_head_dim
+            emb_dim=encoder_dim, num_heads=num_heads, v_head_dim=v_head_dim
         )
 
         self.feed_forward_3 = ZipformerFeedForward()
-        self.bias_norm = BiasNorm(emb_dim)
-        self.bypass_2 = ByPass(emb_dim=emb_dim, straight_through_rate=0.1)
+        self.bias_norm = BiasNorm(encoder_dim)
+        self.bypass_2 = ByPass(dim=encoder_dim, straight_through_rate=0.1)
 
-        self.convolution_2 = Convolution(channels=emb_dim, kernel_size=3)
+        self.convolution_2 = Convolution(channels=encoder_dim, kernel_size=3)
 
     def forward(self, x: Tensor, time_emb: Tensor = None, atten_masks=None):
         atten_weights = self.self_atten_weights(x)
@@ -452,10 +452,10 @@ Channel wise scalar
 
 class ByPass(nn.Module):
     def __init__(
-        self, emb_dim: int, skip_rate: float = 0.0, straight_through_rate: float = 0.0
+        self, dim: int, skip_rate: float = 0.0, straight_through_rate: float = 0.0
     ):
         super().__init__()
-        self.bypass_scale = nn.Parameter(torch.full((emb_dim), 0.5))
+        self.bypass_scale = nn.Parameter(torch.full((dim,), 0.5))
         self.skip_rate = skip_rate
         self.straight_through_rate = straight_through_rate
 
@@ -484,11 +484,7 @@ class ByPass(nn.Module):
 # class BiasNorm(nn.LayerNorm):
 
 
-def convolution():
-    nn.Sequential(
-        conv_2d(in_channels=1, out_channels=128, kernel_size=3, padding=1, stride=1),
-        nn.ReLU(),
-    )
+
 
 
 def limit_param_value(x: torch.Tensor, prob: float, trainning: bool):

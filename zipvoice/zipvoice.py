@@ -25,9 +25,9 @@ class ZipVoice(nn.Module):
         super(ZipVoice, self).__init__()
 
         self.text_encoder = Zipformer(
-            d_in=feat_dim,
-            d_out=text_emb_dim,
-            downsampling_factor=1,
+            d_in=text_emb_dim,
+            d_out=feat_dim,
+            down_sample_factor=1,
             encoder_dim=text_encoder_dim,
             pos_dim=pos_dim,
             q_head_dim=q_head_dim,
@@ -37,7 +37,7 @@ class ZipVoice(nn.Module):
         self.vector_field_estimator = Zipformer(
             d_in=feat_dim * 3,
             d_out=feat_dim,
-            downsampling_factor=down_sample_factors,
+            down_sample_factor=down_sample_factors,
             encoder_dim=encoder_dim,
             pos_dim=pos_dim,
             q_head_dim=q_head_dim,
@@ -76,7 +76,7 @@ class ZipVoice(nn.Module):
 
         combined = torch.cat([x_t, text_cond, speech_cond], dim=-1)
 
-        v_t = self.vector_field_estimator(combined, device, t=x_t)
+        v_t = self.vector_field_estimator(x=combined, t=x_t, device=device)
 
         loss = F.mse_loss(v_t, u_t)
         return loss
@@ -88,7 +88,7 @@ class ZipVoice(nn.Module):
         t: torch.Tensor = None,
     ):
         x = self.emb(torch.tensor(tokens, dtype=torch.int64).to(device))
-        x = self.text_encoder(x=x, t=t)
+        x = self.text_encoder(x=x, t=t, device=device)
         return x
 
     def text_indexing(
