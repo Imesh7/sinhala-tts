@@ -70,7 +70,7 @@ class TTSDataset(Dataset):
             wav_filename += ".wav"
 
         wav_path = self.wav_dir / wav_filename
-        waveform, sr = torchaudio.load(wav_path)  # Returns [channels, time]
+        waveform, sr = librosa.load(wav_path)  # Returns [channels, time]
 
         # Convert to mono if stereo
         if waveform.shape[0] > 1:

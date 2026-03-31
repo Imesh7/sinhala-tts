@@ -81,9 +81,9 @@ class Zipformer(nn.Module):
             nn.Linear(2 * time_emb_dim, time_emb_dim),
         )
 
-    def forward(self, x: Tensor, t: Tensor = None):
+    def forward(self, x: Tensor, t: Tensor = None, device: torch.device = None):
         if t is not None:
-            time_emb = time_embedding(t, x.size(-1)).to(x.device)
+            time_emb = time_embedding(t, x.size(-1)).to(device)
             time_emb = self.time_emb(time_emb)
         else:
             time_emb = None
