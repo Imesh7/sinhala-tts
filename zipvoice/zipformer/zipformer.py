@@ -524,8 +524,6 @@ class RelativePositionalMultiHeadAttention(nn.Module):
 """
 Channel wise scalar
 """
-
-
 class ByPass(nn.Module):
     def __init__(
         self,
@@ -538,7 +536,7 @@ class ByPass(nn.Module):
         super().__init__()
         self.bypass_scale = nn.Parameter(torch.full((dim,), 0.5))
         self.skip_rate = skip_rate
-        self.straight_through_rate = (straight_through_rate,)
+        self.straight_through_rate = copy.deepcopy(straight_through_rate)
         self.min = copy.deepcopy(min)
         self.max = copy.deepcopy(max)
 
@@ -553,13 +551,17 @@ class ByPass(nn.Module):
                 prob=self.skip_rate,
                 training=self.training,
             )
-            if self.skip_rate != 0:
-                mask = torch.rand((batch_size, 1)) > self.skip_rate
-                ans = ans * mask.float()
-
-            if self.straight_through_rate != 0:
-                mask = torch.rand((batch_size, 1)) < self.straight_through_rate
-                ans = torch.maximum(mask, ans)
+            
+            skip_rate = float(self.skip_rate)
+            if skip_rate != 0:
+                mask = torch.rand((batch_size, 1), device=ans.device) > self.skip_rate
+                ans = ans * mask
+                
+            straight_through_rate = float(self.straight_through_rate)
+            if straight_through_rate != 0:
+                mask = torch.rand((batch_size, 1), device=ans.device) < self.straight_through_rate
+                ans = torch.maximum(mask, ans.to(dtype=ans.dtype))
+            return ans
 
     """
     the 'c' can be different according to the config.
