@@ -25,6 +25,7 @@ class ZipVoice(nn.Module):
         text_encoder_num_layers: int = 4,
         text_feed_forward_dim: int = 512,
         vfe_feed_forward_dim: int = 1536,
+        time_emb_dim: int = 192,
     ):
         super(ZipVoice, self).__init__()
 
@@ -50,7 +51,7 @@ class ZipVoice(nn.Module):
             q_head_dim=q_head_dim,
             v_head_dim=v_head_dim,
             feed_forward_dim=vfe_feed_forward_dim,
-            
+            time_emb_dim=time_emb_dim,
         )
 
         self.emb = nn.Embedding(vocab_size, text_emb_dim)

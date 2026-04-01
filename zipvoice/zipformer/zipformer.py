@@ -15,10 +15,9 @@ from zipvoice.zipformer.swosh_activation import Swoosh
 
 def time_embedding(t, dim):
     half_dim = dim // 2
-    emb = math.log(10000) / (half_dim - 1)
-    emb = torch.exp(torch.arange(half_dim) * -emb)
-    emb = t * emb
-    emb = torch.cat((torch.sin(emb), torch.cos(emb)), dim=0)
+    freqs = torch.exp(-math.log(10000) * torch.arange(half_dim, device=t.device) / half_dim)
+    args = t[:, None] * freqs[None, :]
+    emb = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
     return emb
 
 
@@ -36,7 +35,7 @@ class Zipformer(nn.Module):
         v_head_dim: int = 12,
         pos_head_dim: int = 4,
         time_emb_dim: int = 192,
-        feed_forward_dim: int = 768,
+        feed_forward_dim: int = 1536,
     ):
         super(Zipformer, self).__init__()
         if isinstance(down_sample_factor, int):
@@ -88,14 +87,17 @@ class Zipformer(nn.Module):
             nn.ReLU(),
             nn.Linear(2 * time_emb_dim, time_emb_dim),
         )
+        self.time_emb_dim = time_emb_dim
 
     def forward(self, x: Tensor, t: Tensor = None, device: torch.device = None):
+        
+        print("Zipoformer start:", x.shape)
         if t is not None:
-            time_emb = time_embedding(t, x.size(-1)).to(device)
+            time_emb = time_embedding(t, self.time_emb_dim).to(device)
             time_emb = self.time_emb(time_emb)
         else:
             time_emb = None
-
+        
         x = x.permute(1, 0, 2)
         x = self.in_proj(x)
         atten_mask = None
@@ -155,8 +157,8 @@ class DownsampledZipformerEncoder(nn.Module):
         self.upsample = Upsample(upsample_factor=downsample)
         self.bypass = ByPass(dim=dim, skip_rate=0.1, straight_through_rate=0.1)
 
-    def forward(self, x: torch.Tensor, time_emb: Tensor = None, atten_mask=None):
-        
+    def forward(self, x: Tensor, time_emb: Tensor = None, atten_mask=None):
+
         x_original = x
         x = self.downsample(x)
         x = self.encoder_layer(x, time_emb, atten_mask=atten_mask)
@@ -281,7 +283,7 @@ class ZipformerBlock(nn.Module):
             emb_dim=encoder_dim, feed_forward_dim=(feed_forward_dim * 4) // 3
         )
         self.non_linear_attention = NonLinearAttention(
-            channels=encoder_dim, hidden_channels=(3 * encoder_dim) // 4
+            channels=encoder_dim, hidden_channels=3 * encoder_dim // 4
         )
 
         self.self_attention_1 = SelfAttention(
@@ -315,14 +317,25 @@ class ZipformerBlock(nn.Module):
         atten_mask=None,
         device: torch.device = None,
     ):
+        print("Zipformer block start:", x.shape)
+        
         atten_weights = self.self_atten_weights(x, pos_emb)
         x_original = x
+        
+        print("Zipoformer block atten_wei:", atten_weights.shape)
 
         if time_emb is not None:
+            print("Zipformer block x:", x.shape)
+            print("Zipformer block time_emb:", time_emb.shape)
             x = x + time_emb
-
+            print("Zipformer block x:", x.shape)
+            
+        selected_attn_weights = atten_weights[0:1]
+        
+        print("Zipoformer block before ff:", x.shape)
         x = x + self.feed_forward_1(x)
-        x = x + self.non_linear_attention(x, atten_weights)
+        print("Zipoformer block after ff:", x.shape)
+        x = x + self.non_linear_attention(x, selected_attn_weights)
         x = x + self.self_attention_1(x, atten_weights)
 
         x = x + self.convolution_1(x)
@@ -524,6 +537,8 @@ class RelativePositionalMultiHeadAttention(nn.Module):
 """
 Channel wise scalar
 """
+
+
 class ByPass(nn.Module):
     def __init__(
         self,
@@ -551,15 +566,18 @@ class ByPass(nn.Module):
                 prob=self.skip_rate,
                 training=self.training,
             )
-            
+
             skip_rate = float(self.skip_rate)
             if skip_rate != 0:
                 mask = torch.rand((batch_size, 1), device=ans.device) > self.skip_rate
                 ans = ans * mask
-                
+
             straight_through_rate = float(self.straight_through_rate)
             if straight_through_rate != 0:
-                mask = torch.rand((batch_size, 1), device=ans.device) < self.straight_through_rate
+                mask = (
+                    torch.rand((batch_size, 1), device=ans.device)
+                    < self.straight_through_rate
+                )
                 ans = torch.maximum(mask, ans.to(dtype=ans.dtype))
             return ans
 
