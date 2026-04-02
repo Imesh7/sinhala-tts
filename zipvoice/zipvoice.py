@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from zipvoice.utils.common import pad_labels
 from zipvoice.zipformer.zipformer import Zipformer
 import numpy as np
 import math
@@ -96,9 +97,18 @@ class ZipVoice(nn.Module):
         tokens: List[List[int]],
         t: torch.Tensor = None,
         device: torch.device= None,
-    ):
-        x = self.emb(torch.tensor(tokens, dtype=torch.int64).to(device))
+    ):  
+        '''
+        pad_id is '0' for the sinlib tokenizer
+        '''
+        
+        text_emb = pad_labels(tokens, pad_id=0, device=device)
+        x = self.emb(torch.tensor(text_emb, dtype=torch.int64).to(device))
         x = self.text_encoder(x=x, t=t, device=device)
+        return x
+    
+    def token_to_emb(self, tokens: List[List[int]], device: torch.device):
+        x = self.emb(torch.tensor(tokens, dtype=torch.int64).to(device))
         return x
 
     def text_indexing(

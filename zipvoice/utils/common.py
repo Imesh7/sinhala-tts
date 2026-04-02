@@ -1,3 +1,5 @@
+from typing import List
+
 import torch
 
 
@@ -31,3 +33,18 @@ def to_tuple(x, downsampling_factor):
     if len(x) == 1:
         x = x * len(downsampling_factor)
     return x
+
+def pad_labels(y: List[List[int]], pad_id: int, device: torch.device):
+    """
+    Pad the transcripts to the same length with zeros.
+
+    Args:
+      y: the transcripts, which is a list of a list
+
+    Returns:
+      Return a Tensor of padded transcripts.
+    """
+    y = [token_ids + [pad_id] for token_ids in y]
+    length = max([len(token_ids) for token_ids in y])
+    y = [token_ids + [pad_id] * (length - len(token_ids)) for token_ids in y]
+    return torch.tensor(y, dtype=torch.int64, device=device)
