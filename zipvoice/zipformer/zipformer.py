@@ -7,7 +7,7 @@ import torch.nn as nn
 import random
 from torch import Tensor
 
-from zipvoice.utils.common import _to_tuple, to_tuple
+from zipvoice.utils.common import to_tuple
 from zipvoice.zipformer.biasnorm import BiasNorm
 from zipvoice.zipformer.scaling import FloatLike, ScheduledFloat
 from zipvoice.zipformer.swosh_activation import Swoosh
@@ -90,20 +90,20 @@ class Zipformer(nn.Module):
         self.time_emb_dim = time_emb_dim
 
     def forward(self, x: Tensor, t: Tensor = None, device: torch.device = None):
-        
+
         print("Zipoformer start:", x.shape)
         if t is not None:
             time_emb = time_embedding(t, self.time_emb_dim).to(device)
             time_emb = self.time_emb(time_emb)
         else:
             time_emb = None
-        
+
         x = x.permute(1, 0, 2)
         x = self.in_proj(x)
         atten_mask = None
 
-        for layer in self.encoder_layers:
-            x = layer(x, time_emb=time_emb, atten_mask=atten_mask, device=device)
+        for i, layer in enumerate(self.encoder_layers):
+            x = layer(x, time_emb=time_emb, atten_mask=atten_mask)
 
         x = self.out_proj(x)
         x = x.permute(1, 0, 2)
@@ -142,7 +142,7 @@ class ZipformerEncoder(nn.Module):
         if time_emb is not None:
             time_emb = self.time_embeding(time_emb)
 
-        for layer in self.encoder_layer:
+        for i, layer in enumerate(self.encoder_layer):
             x = layer(x, pos_emb, time_emb=time_emb, atten_mask=atten_mask)
 
         return x
@@ -317,21 +317,21 @@ class ZipformerBlock(nn.Module):
         atten_mask=None,
         device: torch.device = None,
     ):
-        print("Zipformer block start:", x.shape)
         
         atten_weights = self.self_atten_weights(x, pos_emb)
         x_original = x
-        
+
         print("Zipoformer block atten_wei:", atten_weights.shape)
 
         if time_emb is not None:
             print("Zipformer block x:", x.shape)
             print("Zipformer block time_emb:", time_emb.shape)
+            time_emb = time_emb.squeeze().unsqueeze(0).expand_as(x)
             x = x + time_emb
             print("Zipformer block x:", x.shape)
-            
+
         selected_attn_weights = atten_weights[0:1]
-        
+
         print("Zipoformer block before ff:", x.shape)
         x = x + self.feed_forward_1(x)
         print("Zipoformer block after ff:", x.shape)
@@ -350,6 +350,7 @@ class ZipformerBlock(nn.Module):
 
         x = self.bias_norm(x)
         x = self.bypass_2(x_original, x)
+        return x
 
 
 class ZipformerFeedForward(nn.Module):
@@ -449,7 +450,7 @@ class SelfAttention(nn.Module):
         return x
 
 
-"""Relative Positional Multi-Head Attention can be implemented 
+"""Relative Positional Multi-Head Attention can be implemented
 3x -> chunk & calculate attention  their outputs."""
 
 
@@ -569,7 +570,7 @@ class ByPass(nn.Module):
 
             skip_rate = float(self.skip_rate)
             if skip_rate != 0:
-                mask = torch.rand((batch_size, 1), device=ans.device) > self.skip_rate
+                mask = torch.rand((batch_size, 1), device=ans.device) > skip_rate
                 ans = ans * mask
 
             straight_through_rate = float(self.straight_through_rate)
@@ -608,6 +609,7 @@ class LimitParamValue(torch.autograd.Function):
         ctx.save_for_backward(x)
         ctx.min = min
         ctx.max = max
+        return x
 
     """
     Gradient flipping for constrained optimization
