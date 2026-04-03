@@ -113,9 +113,9 @@ class ZipVoice(nn.Module):
         token_pad = pad_labels(tokens, pad_id=0, device=device)
         x = self.emb(torch.tensor(token_pad, dtype=torch.int64).to(device))
 
-        tokens_lens = torch.tensor(
-            [len(token) for token in tokens], dtype=torch.int64, device=device
-        )
+        text_lengths = [len(token) for token in tokens]
+        tokens_lens = torch.tensor(text_lengths, dtype=torch.int64, device=device)
+        
         x = self.text_encoder(x=x, t=None, device=device)
         return x, tokens_lens
 

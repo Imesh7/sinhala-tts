@@ -102,16 +102,16 @@ def train():
             noise = torch.randn_like(features).to(device)  # random noise
 
             loss = model(
-                text_tokens, features, feature_lens, noise, t=t, device=device
+                text_tokens, features, feature_lens, noise=noise, t=t, device=device
             )  # Forward pass with noise
-            
+
             update_batch_size(
                 model, batch_size=batch_size_idx
             )  # Update batch size for ScheduledFloat
             batch_size_idx += 1
 
             optimizer.zero_grad(set_to_none=True)
-            
+
             if scaler:
                 scaler.scale(loss).backward()
                 scaler.unscale_(optimizer)
