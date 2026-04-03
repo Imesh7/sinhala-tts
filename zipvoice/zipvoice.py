@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from zipvoice.utils.common import pad_labels
+from zipvoice.utils.common import condition_time_mask, pad_labels
 from zipvoice.zipformer.zipformer import Zipformer
 import numpy as np
 import math
@@ -67,16 +67,25 @@ class ZipVoice(nn.Module):
         device: torch.device,
     ) -> torch.Tensor:
 
-        emb = self.text_encode(tokens=tokens, t=t, device=device)
+        emb, token_lens = self.text_encode(tokens=tokens, t=t, device=device) # [B, seq_len, text_emb_dim]
 
         text_cond = self.text_conditioning(
             text_emb=emb,
             features_lens=feature_lens,
+            token_lens=token_lens,
             device=device,
         )
 
-        speech_cond = speech_infilling_masking(
-            sound_emb=features, mask_ratio=0.5, spans=3
+        condition_time_masked = condition_time_mask(
+            features_lens=feature_lens,
+            mask_percent=(0.7, 0.9),
+            max_len=features.size(1)
+        )
+        
+        speech_cond = torch.where(
+            condition_time_masked.unsqueeze(-1),
+            0,
+            features
         )
 
         # x_1 -> target
@@ -85,7 +94,7 @@ class ZipVoice(nn.Module):
         x_t = t * features + (1 - t) * noise
         u_t = x_t - noise
 
-        combined = torch.cat([x_t, text_cond, speech_cond], dim=-1)
+        combined = torch.cat([x_t, text_cond, speech_cond], dim=2)
 
         v_t = self.vector_field_estimator(x=combined, t=x_t, device=device)
 
@@ -96,17 +105,21 @@ class ZipVoice(nn.Module):
         self,
         tokens: List[List[int]],
         t: torch.Tensor = None,
-        device: torch.device= None,
-    ):  
-        '''
+        device: torch.device = None,
+    ):
+        """
         pad_id is '0' for the sinlib tokenizer
-        '''
-        
-        text_emb = pad_labels(tokens, pad_id=0, device=device)
-        x = self.emb(torch.tensor(text_emb, dtype=torch.int64).to(device))
+        """
+
+        token_pad = pad_labels(tokens, pad_id=0, device=device)
+        x = self.emb(torch.tensor(token_pad, dtype=torch.int64).to(device))
+
+        tokens_lens = torch.tensor(
+            [len(token) for token in tokens], dtype=torch.int64, device=device
+        )
         x = self.text_encoder(x=x, t=t, device=device)
-        return x
-    
+        return x, tokens_lens
+
     def token_to_emb(self, tokens: List[List[int]], device: torch.device):
         x = self.emb(torch.tensor(tokens, dtype=torch.int64).to(device))
         return x
@@ -117,11 +130,11 @@ class ZipVoice(nn.Module):
         durations = [x + [num_frames - sum(x)] for x in durations]
         batch_size = len(durations)
 
-        ans = torch.zeros((batch_size, num_frames), dtype=torch.int64).to(device)
+        ans = torch.zeros((batch_size, num_frames), dtype=torch.int64)
 
         for b in range(batch_size):
             cur_frame = 0
-            for i, d in durations[b]:
+            for i, d in enumerate(durations[b]):
                 ans[b, cur_frame : cur_frame + d] = i
                 cur_frame += d
         return ans
@@ -130,36 +143,40 @@ class ZipVoice(nn.Module):
         self,
         text_emb: torch.Tensor,
         features_lens: torch.Tensor,  # shape is [batch_size,]
+        token_lens: torch.Tensor,
         device: torch.device,
     ):
         num_frames = int(features_lens.max())
-        avg_upsampled_durations = self.average_upsample(text_emb, features_lens)
-        text_indexing = self.text_indexing(
+        print(f"Num frames: {num_frames}, Text emb shape: {text_emb.shape}, Token lens shape: {token_lens.shape}, Features lens shape: {features_lens.shape}")
+        avg_upsampled_durations = self.average_upsample(
+            token_lens=token_lens, features_lens=features_lens
+        )
+        token_indexing = self.text_indexing(
             durations=avg_upsampled_durations, num_frames=num_frames, device=device
         )
 
         return torch.gather(
             text_emb,
             dim=1,
-            index=text_indexing.unsqueeze(-1).expand(
+            index=token_indexing.unsqueeze(-1).expand(
                 text_emb.size(0), num_frames, text_emb.size(-1)
             ),
         )  # [batch, num_frames, text_emb_dim]
 
-    def average_upsample(self, text_emb: torch.Tensor, features_lens: torch.Tensor):
+    def average_upsample(self, token_lens: torch.Tensor, features_lens: torch.Tensor):
         res = []
+        print(f"Token lens shape: {token_lens.shape}, Features lens shape: {features_lens.shape}")
         for i in range(len(features_lens)):
-            token_len = len(text_emb[i])
-            avg_token_duration = features_lens[i] // token_len
+            avg_token_duration = features_lens[i] // token_lens[i]
             res.append(
-                [avg_token_duration] * token_len
+                [avg_token_duration] * token_lens[i]
             )  # if average 11 , it shows like this -> [11, 11, 11]
         return res
 
 
-def speech_infilling_masking(sound_emb, mask_ratio, spans=3):
-    target = sound_emb.copy()
-    s_size = len(sound_emb)
+def speech_infilling_masking(feature_lens:torch.Tensor, mask_ratio, spans=3):
+    target = feature_lens
+    s_size = len(feature_lens)
     mask_size = math.ceil(s_size * mask_ratio)
     mask = np.zeros(s_size)
 
