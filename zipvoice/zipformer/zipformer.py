@@ -1,6 +1,6 @@
 import math
 from shutil import copy
-from typing import List, Tuple, Union
+from typing import Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -90,8 +90,6 @@ class Zipformer(nn.Module):
         self.time_emb_dim = time_emb_dim
 
     def forward(self, x: Tensor, t: Tensor = None, device: torch.device = None):
-
-        print("Zipoformer start:", x.shape)
         if t is not None:
             time_emb = time_embedding(t, self.time_emb_dim).to(device)
             time_emb = self.time_emb(time_emb)
@@ -103,7 +101,7 @@ class Zipformer(nn.Module):
         atten_mask = None
 
         for i, layer in enumerate(self.encoder_layers):
-            x = layer(x, time_emb=time_emb, atten_mask=atten_mask)
+            x = layer(x, time_emb=time_emb, atten_mask=atten_mask, device=device)
 
         x = self.out_proj(x)
         x = x.permute(1, 0, 2)
@@ -143,7 +141,7 @@ class ZipformerEncoder(nn.Module):
             time_emb = self.time_embeding(time_emb)
 
         for i, layer in enumerate(self.encoder_layer):
-            x = layer(x, pos_emb, time_emb=time_emb, atten_mask=atten_mask)
+            x = layer(x, pos_emb, time_emb=time_emb, atten_mask=atten_mask).to(device)
 
         return x
 
@@ -157,11 +155,11 @@ class DownsampledZipformerEncoder(nn.Module):
         self.upsample = Upsample(upsample_factor=downsample)
         self.bypass = ByPass(dim=dim, skip_rate=0.1, straight_through_rate=0.1)
 
-    def forward(self, x: Tensor, time_emb: Tensor = None, atten_mask=None):
+    def forward(self, x: Tensor, time_emb: Tensor = None, atten_mask=None, device: torch.device = None):
 
         x_original = x
         x = self.downsample(x)
-        x = self.encoder_layer(x, time_emb, atten_mask=atten_mask)
+        x = self.encoder_layer(x, time_emb, atten_mask=atten_mask, device=device)
         x = self.upsample(x)
 
         return self.bypass(x_original, x)
@@ -279,7 +277,7 @@ class ZipformerBlock(nn.Module):
             pos_dim=pos_dim,
         )
 
-        self.feed_forward_1 = ZipformerFeedForwardMo(
+        self.feed_forward_1 = ZipformerFeedForward(
             emb_dim=encoder_dim, feed_forward_dim=(feed_forward_dim * 4) // 3
         )
         self.non_linear_attention = NonLinearAttention(
@@ -291,7 +289,7 @@ class ZipformerBlock(nn.Module):
         )
         self.convolution_1 = Convolution(channels=encoder_dim, kernel_size=3)
 
-        self.feed_forward_2 = ZipformerFeedForwardMo(
+        self.feed_forward_2 = ZipformerFeedForward(
             emb_dim=encoder_dim, feed_forward_dim=feed_forward_dim
         )
         self.bypass_1 = ByPass(
@@ -301,7 +299,7 @@ class ZipformerBlock(nn.Module):
             emb_dim=encoder_dim, num_heads=num_heads, v_head_dim=v_head_dim
         )
 
-        self.feed_forward_3 = ZipformerFeedForwardMo(
+        self.feed_forward_3 = ZipformerFeedForward(
             emb_dim=encoder_dim, feed_forward_dim=(feed_forward_dim * 5) // 3
         )
         self.bias_norm = BiasNorm(encoder_dim)
@@ -332,9 +330,7 @@ class ZipformerBlock(nn.Module):
 
         selected_attn_weights = atten_weights[0:1]
 
-        print("Zipoformer block before ff:", x.shape)
         x = x + self.feed_forward_1(x)
-        print("Zipoformer block after ff:", x.shape)
         x = x + self.non_linear_attention(x, selected_attn_weights)
         x = x + self.self_attention_1(x, atten_weights)
 
@@ -353,43 +349,45 @@ class ZipformerBlock(nn.Module):
         return x
 
 
+# class ZipformerFeedForward(nn.Module):
+#     def __init__(self, dims=[512, 2048, 768], dropout=0.1):
+#         super().__init__()
+#         self.layers = nn.ModuleList()
+#         self.layer_norm = nn.ModuleList()
+#         self.dropout = nn.Dropout(dropout)
+
+#         for i in range(len(dims) - 1):
+#             self.layers.append(nn.Linear(dims[i], dims[i + 1]))
+
+#             if i < len(dims) - 2:
+#                 self.layer_norm.append(nn.LayerNorm(dims[i + 1]))
+
+#     def forward(self, x):
+#         x = self.layers[0](x)
+#         x = self.layer_norm[0](residual)
+
+#         for i in range(1, len(self.layers) - 1):
+#             residual = x
+#             x = self.layers[i](x)
+#             x = self.layer_norm[i](x)
+#             x = self.dropout(x)
+#             x = x + residual
+
+#         x = self.layers[-1](x)
+#         return x
+
+
 class ZipformerFeedForward(nn.Module):
-    def __init__(self, dims=[512, 2048, 768], dropout=0.1):
-        super().__init__()
-        self.layers = nn.ModuleList()
-        self.layer_norm = nn.ModuleList()
-        self.dropout = nn.Dropout(dropout)
-
-        for i in range(len(dims) - 1):
-            self.layers.append(nn.Linear(dims[i], dims[i + 1]))
-
-            if i < len(dims) - 2:
-                self.layer_norm.append(nn.LayerNorm(dims[i + 1]))
-
-    def forward(self, x):
-        x = self.layers[0](x)
-        x = self.layer_norm[0](residual)
-
-        for i in range(1, len(self.layers) - 1):
-            residual = x
-            x = self.layers[i](x)
-            x = self.layer_norm[i](x)
-            x = self.dropout(x)
-            x = x + residual
-
-        x = self.layers[-1](x)
-        return x
-
-
-class ZipformerFeedForwardMo(nn.Module):
     def __init__(self, emb_dim: int, feed_forward_dim: int, dropout=0.1):
         super().__init__()
         self.in_proj = nn.Linear(emb_dim, feed_forward_dim)
+        self.activation = nn.ReLU() # Swoosh()
         self.out_proj = nn.Linear(feed_forward_dim, emb_dim)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         x = self.in_proj(x)
+        x = self.activation(x)
         x = self.dropout(x)
         x = self.out_proj(x)
         return x

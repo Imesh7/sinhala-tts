@@ -59,8 +59,6 @@ def train():
     model = ZipVoice().to(device)  # Initialize the ZipVoice model
     # Training loop for the ZipVoice model
     num_epochs = 10
-    loss = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
     batch_size_idx = 0
 
     # vocoder
@@ -103,25 +101,19 @@ def train():
 
             noise = torch.randn_like(features).to(device)  # random noise
 
-            outputs = model(
+            loss = model(
                 text_tokens, features, feature_lens, noise, t=t, device=device
             )  # Forward pass with noise
             
-            loss_val = loss(outputs, mel_spec)
-            optimizer.zero_grad()
-            loss_val.backward()
-            optimizer.step()
             update_batch_size(
                 model, batch_size=batch_size_idx
             )  # Update batch size for ScheduledFloat
             batch_size_idx += 1
 
-            # Backward
-            optimizer.zero_grad(set_to_none=True)  # More memory efficient
-
+            optimizer.zero_grad(set_to_none=True)
+            
             if scaler:
                 scaler.scale(loss).backward()
-                # Gradient clipping (prevents explosion)
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 scaler.step(optimizer)
@@ -133,7 +125,6 @@ def train():
 
             scheduler.step()
 
-            # Track loss
             loss_val = loss.item()
             epoch_losses.append(loss_val)
             writer.add_scalar("Loss/train", loss_val, batch_size_idx)
@@ -145,7 +136,7 @@ def train():
                 print(
                     f"Epoch [{epoch+1}/{num_epochs}] "
                     f"Batch [{batch_idx}/{len(dataloader)}] "
-                    f"Loss: {loss_val:.4f} (avg: {avg_loss:.4f}) "
+                    f"Loss: {loss:.4f} (avg: {avg_loss:.4f}) "
                     f"LR: {scheduler.get_last_lr()[0]:.2e}"
                 )
 
@@ -164,7 +155,7 @@ def train():
                         "model_state_dict": model.state_dict(),
                         "optimizer_state_dict": optimizer.state_dict(),
                         "scheduler_state_dict": scheduler.state_dict(),
-                        "loss": loss_val,
+                        "loss": loss,
                         "scaler_state_dict": scaler.state_dict() if scaler else None,
                     },
                     ckpt_path,

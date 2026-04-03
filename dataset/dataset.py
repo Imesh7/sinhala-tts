@@ -14,7 +14,7 @@ class TTSDataset(Dataset):
         data_path,
         tokenizer,
         sample_rate=22050,
-        n_mels=80,
+        n_mels=100, # This n_mels should match the feat_dim used in the ZipVoice model
         hop_length=256,
         n_fft=1024,
     ):

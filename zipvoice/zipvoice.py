@@ -15,7 +15,7 @@ class ZipVoice(nn.Module):
         self,
         down_sample_factors: List[int] = [1, 2, 4, 2, 1],
         vector_field_estimator_num_layers: List[int] = [2, 2, 4, 4, 4],
-        feat_dim: int = 100,
+        feat_dim: int = 100, # This should match the n_mels used in the TTSDataset
         text_emb_dim: int = 192,
         text_encoder_dim: int = 192,
         encoder_dim: int = 512,
@@ -96,7 +96,7 @@ class ZipVoice(nn.Module):
 
         combined = torch.cat([x_t, text_cond, speech_cond], dim=2)
 
-        v_t = self.vector_field_estimator(x=combined, t=x_t, device=device)
+        v_t = self.vector_field_estimator(x=combined, t=t, device=device)
 
         loss = F.mse_loss(v_t, u_t)
         return loss
@@ -104,7 +104,6 @@ class ZipVoice(nn.Module):
     def text_encode(
         self,
         tokens: List[List[int]],
-        t: torch.Tensor = None,
         device: torch.device = None,
     ):
         """
@@ -117,7 +116,7 @@ class ZipVoice(nn.Module):
         tokens_lens = torch.tensor(
             [len(token) for token in tokens], dtype=torch.int64, device=device
         )
-        x = self.text_encoder(x=x, t=t, device=device)
+        x = self.text_encoder(x=x, t=None, device=device)
         return x, tokens_lens
 
     def token_to_emb(self, tokens: List[List[int]], device: torch.device):

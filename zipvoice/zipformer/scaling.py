@@ -1,8 +1,6 @@
 
 from typing import Union
-
 from torch import nn
-
 
 class ScheduledFloat(nn.Module):
     def __init__(self, schedule=None, default=0.0):

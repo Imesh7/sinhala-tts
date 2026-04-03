@@ -3,14 +3,14 @@ from typing import List, Tuple
 import torch
 
 
-def prepare_audio_input(features, feat_scale=1.0, device=torch.device):
+def prepare_audio_input(mel_spec, feat_scale=1.0, device=torch.device):
     """
     Prepare audio input for the model.
-    features is audio mel spectrogram of shape [T, D]
+    mel_spec is audio mel spectrogram of shape [BATCH, NUM_FRAMES, TIME]
     tokens is text token ids of shape [B, N]
     """
-    features = features.unsqueeze(0) * feat_scale
-    features_lens = torch.tensor([features.size(1)], device=device)
+    features = mel_spec.permute(0, 2, 1) * feat_scale # [BATCH, TIME, NUM_FRAMES]
+    features_lens = torch.full((features.size(0),), features.size(1), dtype=torch.int64, device=device)
 
     return features, features_lens
 
