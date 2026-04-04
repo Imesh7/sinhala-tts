@@ -66,6 +66,9 @@ class ZipVoice(nn.Module):
         t: torch.Tensor,
         device: torch.device,
     ) -> torch.Tensor:
+        '''
+        t: the time step, with the shape (batch, 1, 1).
+        '''
 
         emb, token_lens = self.text_encode(
             tokens=tokens, device=device
@@ -93,6 +96,12 @@ class ZipVoice(nn.Module):
         u_t = x_t - noise
 
         combined = torch.cat([x_t, text_cond, speech_cond], dim=2)
+        
+        while t.dim() > 1 and t.size(-1) == 1:
+            t = t.squeeze(-1)
+        # Handle t with a single value: expand to the size of batch size.
+        if t.dim() == 0:
+            t = t.repeat(x_t.shape[0])
 
         v_t = self.vector_field_estimator(
             x=combined, t=t, padding_mask=pad_mask, device=device
