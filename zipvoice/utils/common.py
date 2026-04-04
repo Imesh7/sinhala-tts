@@ -9,8 +9,10 @@ def prepare_audio_input(mel_spec, feat_scale=1.0, device=torch.device):
     mel_spec is audio mel spectrogram of shape [BATCH, NUM_FRAMES, TIME]
     tokens is text token ids of shape [B, N]
     """
-    features = mel_spec.permute(0, 2, 1) * feat_scale # [BATCH, TIME, NUM_FRAMES]
-    features_lens = torch.full((features.size(0),), features.size(2), dtype=torch.int64, device=device)
+    features = mel_spec.permute(0, 2, 1) * feat_scale  # [BATCH, TIME, NUM_FRAMES]
+    features_lens = torch.full(
+        (features.size(0),), features.size(1), dtype=torch.long, device=device
+    )
 
     return features, features_lens
 
@@ -84,6 +86,7 @@ def condition_time_mask(
         seq_range[None, :] < mask_ends[:, None]
     )
     return mask
+
 
 def pad_mask(lengths: torch.Tensor, max_length: int, device: torch.device):
     max_len = max(max_length, lengths.max())

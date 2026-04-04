@@ -136,7 +136,7 @@ def train():
                 print(
                     f"Epoch [{epoch+1}/{num_epochs}] "
                     f"Batch [{batch_idx}/{len(dataloader)}] "
-                    f"Loss: {loss:.4f} (avg: {avg_loss:.4f}) "
+                    f"Loss: {loss_val:.4f} (avg: {avg_loss:.4f}) "
                     f"LR: {scheduler.get_last_lr()[0]:.2e}"
                 )
 
