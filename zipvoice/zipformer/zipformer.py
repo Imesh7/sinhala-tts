@@ -89,7 +89,7 @@ class Zipformer(nn.Module):
         )
         self.time_emb_dim = time_emb_dim
 
-    def forward(self, x: Tensor, t: Tensor = None, device: torch.device = None):
+    def forward(self, x: Tensor, t: Tensor = None, padding_mask: Tensor = None, device: torch.device = None):
         if t is not None:
             time_emb = time_embedding(t, self.time_emb_dim).to(device)
             time_emb = self.time_emb(time_emb)
@@ -101,7 +101,7 @@ class Zipformer(nn.Module):
         atten_mask = None
 
         for i, layer in enumerate(self.encoder_layers):
-            x = layer(x, time_emb=time_emb, atten_mask=atten_mask, device=device)
+            x = layer(x, time_emb=time_emb, atten_mask=atten_mask,padding_mask=padding_mask, device=device)
 
         x = self.out_proj(x)
         x = x.permute(1, 0, 2)
@@ -132,6 +132,7 @@ class ZipformerEncoder(nn.Module):
         x: Tensor,
         time_emb: Tensor = None,
         atten_mask: Tensor = None,
+        padding_mask: Tensor = None,
         device: torch.device = None,
     ):
 
@@ -141,7 +142,7 @@ class ZipformerEncoder(nn.Module):
             time_emb = self.time_embeding(time_emb)
 
         for i, layer in enumerate(self.encoder_layer):
-            x = layer(x, pos_emb, time_emb=time_emb, atten_mask=atten_mask).to(device)
+            x = layer(x, pos_emb, time_emb=time_emb, atten_mask=atten_mask, padding_mask=padding_mask).to(device)
 
         return x
 
@@ -155,11 +156,11 @@ class DownsampledZipformerEncoder(nn.Module):
         self.upsample = Upsample(upsample_factor=downsample)
         self.bypass = ByPass(dim=dim, skip_rate=0.1, straight_through_rate=0.1)
 
-    def forward(self, x: Tensor, time_emb: Tensor = None, atten_mask=None, device: torch.device = None):
+    def forward(self, x: Tensor, time_emb: Tensor = None, atten_mask=None, padding_mask=None, device: torch.device = None):
 
         x_original = x
         x = self.downsample(x)
-        x = self.encoder_layer(x, time_emb, atten_mask=atten_mask, device=device)
+        x = self.encoder_layer(x, time_emb, atten_mask=atten_mask, padding_mask=padding_mask, device=device)
         x = self.upsample(x)
 
         return self.bypass(x_original, x)
@@ -312,18 +313,17 @@ class ZipformerBlock(nn.Module):
         x: Tensor,
         pos_emb: Tensor,
         time_emb: Tensor = None,
+        padding_mask: Tensor = None,
         atten_mask=None,
         device: torch.device = None,
     ):
         
-        atten_weights = self.self_atten_weights(x, pos_emb)
+        atten_weights = self.self_atten_weights(x, pos_emb, padding_mask=padding_mask, device=device)
         x_original = x
 
         print("Zipoformer block atten_wei:", atten_weights.shape)
 
         if time_emb is not None:
-            print("Zipformer block x:", x.shape)
-            print("Zipformer block time_emb:", time_emb.shape)
             time_emb = time_emb.squeeze().unsqueeze(0).expand_as(x)
             x = x + time_emb
             print("Zipformer block x:", x.shape)
@@ -482,7 +482,7 @@ class RelativePositionalMultiHeadAttention(nn.Module):
         return output
 
     def forward(
-        self, x: torch.Tensor, pos_emb: torch.Tensor, device: torch.device = None
+        self, x: torch.Tensor, pos_emb: torch.Tensor,padding_mask: torch.Tensor = None, device: torch.device = None
     ):
         x = self.in_proj(x)
         seq_len, batch_size, d_in = x.shape
@@ -528,6 +528,12 @@ class RelativePositionalMultiHeadAttention(nn.Module):
             )
 
             attn_scores = attn_scores + pos_scores
+        
+        if padding_mask is not None:
+            assert padding_mask.shape == (batch_size, seq_len), f"Expected padding_mask shape {(batch_size, seq_len)}, but got {padding_mask.shape}"
+            attn_scores = attn_scores.masked_fill(
+                padding_mask.unsqueeze(1), -1000
+            )
 
         attn_weights = torch.softmax(attn_scores, dim=-1)
         return attn_weights
@@ -644,15 +650,20 @@ class Convolution(nn.Module):
         )
         self.out_proj = nn.Linear(channels, channels)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor, padding_mask: torch.Tensor = None):
 
         # x -> (time, batch, channels)
         x = self.in_proj(x)
 
         x, y = x.chunk(2, dim=-1)
         x = x * self.sigmoid(y)
-
+        
         x = x.permute(1, 2, 0)  # (batch, channels, time)
+        
+        if padding_mask is not None:
+            assert padding_mask.shape == (x.shape[1], x.shape[0]), f"Expected padding_mask shape {(x.shape[1], x.shape[0])}, but got {padding_mask.shape}"
+            x = x.masked_fill(padding_mask.unsqueeze(1).expand_as(x), 0)
+            
         x = self.depthwise_conv(x)
         x = x.permute(2, 0, 1)
 
