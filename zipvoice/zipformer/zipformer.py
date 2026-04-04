@@ -160,8 +160,19 @@ class DownsampledZipformerEncoder(nn.Module):
 
         x_original = x
         x = self.downsample(x)
+        
+        ds = self.downsample_factor
+        
+        if time_emb is not None and time_emb.dim() == 3:
+            time_emb = time_emb[::ds]
+        if attn_mask is not None:
+            attn_mask = attn_mask[::ds, ::ds]
+        if padding_mask is not None:
+            padding_mask = padding_mask[..., ::ds]
         x = self.encoder_layer(x, time_emb, atten_mask=atten_mask, padding_mask=padding_mask, device=device)
         x = self.upsample(x)
+        
+        x = x[: x_original.shape[0]]
 
         return self.bypass(x_original, x)
 
@@ -321,12 +332,9 @@ class ZipformerBlock(nn.Module):
         atten_weights = self.self_atten_weights(x, pos_emb, padding_mask=padding_mask, device=device)
         x_original = x
 
-        print("Zipoformer block atten_wei:", atten_weights.shape)
-
         if time_emb is not None:
-            time_emb = time_emb.squeeze().unsqueeze(0).expand_as(x)
+            time_emb = time_emb.unsqueeze(0)
             x = x + time_emb
-            print("Zipformer block x:", x.shape)
 
         selected_attn_weights = atten_weights[0:1]
 
@@ -334,13 +342,13 @@ class ZipformerBlock(nn.Module):
         x = x + self.non_linear_attention(x, selected_attn_weights)
         x = x + self.self_attention_1(x, atten_weights)
 
-        x = x + self.convolution_1(x)
+        x = x + self.convolution_1(x, padding_mask)
 
         x = x + self.feed_forward_2(x)
         x = self.bypass_1(x_original, x)
         x = x + self.self_attention_2(x, atten_weights)
 
-        x = x + self.convolution_2(x)
+        x = x + self.convolution_2(x, padding_mask)
 
         x = x + self.feed_forward_3(x)
 
@@ -661,7 +669,6 @@ class Convolution(nn.Module):
         x = x.permute(1, 2, 0)  # (batch, channels, time)
         
         if padding_mask is not None:
-            assert padding_mask.shape == (x.shape[1], x.shape[0]), f"Expected padding_mask shape {(x.shape[1], x.shape[0])}, but got {padding_mask.shape}"
             x = x.masked_fill(padding_mask.unsqueeze(1).expand_as(x), 0)
             
         x = self.depthwise_conv(x)
