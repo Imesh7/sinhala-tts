@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from zipvoice.utils.common import condition_time_mask, pad_labels, pad_mask
+from zipvoice.zipformer.solver import EulerSolver
 from zipvoice.zipformer.zipformer import Zipformer
 import numpy as np
 import math
@@ -22,7 +23,7 @@ class ZipVoice(nn.Module):
         pos_dim: int = 48,
         q_head_dim: int = 32,
         v_head_dim: int = 12,
-        vocab_size: int = 754,
+        vocab_size: int = 755,
         text_encoder_num_layers: int = 4,
         text_feed_forward_dim: int = 512,
         vfe_feed_forward_dim: int = 1536,
@@ -56,6 +57,7 @@ class ZipVoice(nn.Module):
         )
 
         self.emb = nn.Embedding(vocab_size, text_emb_dim)
+        self.solver = EulerSolver(self, func_name="flow_estimate")
 
     def forward(
         self,
@@ -66,9 +68,9 @@ class ZipVoice(nn.Module):
         t: torch.Tensor,
         device: torch.device,
     ) -> torch.Tensor:
-        '''
+        """
         t: the time step, with the shape (batch, 1, 1).
-        '''
+        """
 
         emb, token_lens = self.text_encode(
             tokens=tokens, device=device
@@ -95,22 +97,43 @@ class ZipVoice(nn.Module):
         x_t = t * features + (1 - t) * noise
         u_t = x_t - noise
 
-        combined = torch.cat([x_t, text_cond, speech_cond], dim=2)
-        
         while t.dim() > 1 and t.size(-1) == 1:
             t = t.squeeze(-1)
         # Handle t with a single value: expand to the size of batch size.
         if t.dim() == 0:
             t = t.repeat(x_t.shape[0])
 
-        v_t = self.vector_field_estimator(
-            x=combined, t=t, padding_mask=pad_mask, device=device
+        v_t = self.flow_estimate(
+            t=t,
+            x_t=x_t,
+            text_cond=text_cond,
+            speech_cond=speech_cond,
+            pad_mask=pad_mask,
+            device=device,
         )
 
         loss_mask = condition_time_masked & (~pad_mask)
 
         loss = torch.mean((v_t[loss_mask] - u_t[loss_mask]) ** 2)
         return loss
+
+    def flow_estimate(
+        self,
+        t: torch.Tensor,
+        x_t: torch.Tensor,
+        speech_cond: torch.Tensor,
+        text_cond: torch.Tensor,
+        pad_mask: torch.Tensor,
+        device: torch.device = None,
+    ) -> torch.Tensor:
+
+        combined = torch.cat([x_t, text_cond, speech_cond], dim=2)
+
+        v_t = self.vector_field_estimator(
+            x=combined, t=t, padding_mask=pad_mask, device=device
+        )
+
+        return v_t
 
     def text_encode(
         self,
@@ -194,6 +217,77 @@ class ZipVoice(nn.Module):
                 [avg_token_duration] * token_lens[i]
             )  # if average 11 , it shows like this -> [11, 11, 11]
         return res
+
+    def sample(
+        self,
+        tokens: List[List[int]],
+        prompt_tokens: List[List[int]],
+        prompt_features: torch.Tensor,
+        prompt_feature_lens: torch.Tensor,
+        device: torch.device,
+        speed: float = 1.0,
+    ):
+
+        cat_tokens = [prompt_tokens[i] + tokens[i] for i in zip(tokens, prompt_tokens)]
+
+        cat_emb, cat_text_tokens = self.text_encode(tokens=cat_tokens, device=device)
+
+        prompt_text_token_lens = torch.tensor(
+            [len(t) for t in prompt_tokens], dtype=torch.int64, device=device
+        )
+        
+        text_token_lens = torch.tensor(
+            [len(t) for t in tokens], dtype=torch.int64, device=device
+        )
+
+        features_lens = prompt_feature_lens + torch.ceil(
+            (prompt_feature_lens / prompt_text_token_lens * text_token_lens / speed)
+        ).to(dtype=torch.int64)
+
+        (text_cond, pad_mask) = self.text_conditioning(
+            text_emb=cat_emb,
+            features_lens=features_lens,
+            token_lens=cat_text_tokens,
+            device=device,
+        )
+
+        batch_size, num_frames, _ = text_cond.shape
+
+        speech_cond = torch.nn.functional.pad(
+            prompt_features, (0, 0, 0, num_frames - prompt_features.size(1)), value=0
+        )
+
+        speech_condition_mask = pad_mask(
+            features_lens=features_lens, max_length=num_frames, device=device
+        )
+
+        speech_cond = torch.where(speech_condition_mask.unsqueeze(-1), 0, speech_cond)
+
+        x0 = torch.randn(
+            batch_size,
+            num_frames,
+            prompt_features.size(-1),
+            device=device,
+        )
+
+        x1 = self.solver.sample(
+            x=x0,
+            text_condition=text_cond,
+            speech_condition=speech_cond,
+            pad_mask=pad_mask,
+            device=device,
+        )
+        
+        x1_wo_prompt_lens = (~pad_mask).sum(-1) - prompt_feature_lens
+        
+        x1_prompt = torch.zeros_like(x1.size(0), prompt_feature_lens.max(), x1.size(-1), device=device)
+        x1_wo_prompt = torch.zeros_like(x1.size(0), x1_wo_prompt_lens.max(), x1.size(-1), device=device)
+        
+        for i in range(x1.size(0)):
+            x1_prompt[i, :prompt_feature_lens[i]] = x1[i, :prompt_feature_lens[i]]
+            x1_wo_prompt[i, :x1_wo_prompt_lens[i], :] = x1[i, prompt_feature_lens[i]: prompt_feature_lens[i] + x1_wo_prompt_lens[i]]
+            
+        return x1_wo_prompt,x1_wo_prompt_lens, x1_prompt, prompt_feature_lens
 
 
 def speech_infilling_masking(feature_lens: torch.Tensor, mask_ratio, spans=3):
