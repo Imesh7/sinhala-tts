@@ -6,7 +6,6 @@ from zipvoice.zipformer.scaling import ScheduledFloat
 from zipvoice.zipvoice import ZipVoice
 import torch
 import torch.nn as nn
-from vocos import Vocos
 from sinlib import Tokenizer
 import os
 from torch.utils.tensorboard import SummaryWriter
@@ -60,10 +59,6 @@ def train():
     # Training loop for the ZipVoice model
     num_epochs = 10
     batch_size_idx = 0
-
-    # vocoder
-    vocos = Vocos.from_pretrained("charactr/vocos-mel-24khz")
-    vocos.eval()
 
     # optimizer
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-6)
