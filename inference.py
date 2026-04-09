@@ -1,7 +1,10 @@
+from pathlib import Path
+
 import librosa
 from sinlib import Tokenizer
 from vocos import Vocos
 
+from zipvoice.utils.checkpoint import load_checkpoint
 from zipvoice.utils.common import prepare_audio_input
 from zipvoice.zipvoice import ZipVoice
 import torch
@@ -21,6 +24,11 @@ def inference():
     # load model from local checkpoint
     model = ZipVoice()
     model.eval()
+    
+    last_checkpoint = 500
+    checkpoint_dir = Path("/content/drive/MyDrive/sinhala-tts-checkpoints")
+    checkpoint_file_path = checkpoint_dir / f"checkpoint_step{last_checkpoint}.pth"
+    model , _, _ = load_checkpoint(model, None, checkpoint_file_path)
 
     # vocoder
     vocos = Vocos.from_pretrained("charactr/vocos-mel-24khz")
@@ -41,7 +49,7 @@ def inference():
     pred_features = pred_features.permute(0, 2, 1)
     
     # wav = vocos.decode(pred_features).squeeze(1).clamp(-1, 1)
-    vocos.decode(x1_prompt.cpu(), prompt_feature_lens.cpu(), "output_with_prompt.wav")
+    vocos.decode(x1_wo_prompt.cpu(), "output_with_prompt.wav")
 
 
 def process_audio(file_path):

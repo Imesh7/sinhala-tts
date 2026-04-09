@@ -1,13 +1,13 @@
 from pathlib import Path
 
 from dataset.datamodule import DataModule
+from zipvoice.utils.checkpoint import load_checkpoint, save_checkpoint
 from zipvoice.utils.common import prepare_audio_input, sampling_time
 from zipvoice.zipformer.scaling import ScheduledFloat
 from zipvoice.zipvoice import ZipVoice
 import torch
 import torch.nn as nn
 from sinlib import Tokenizer
-import os
 from torch.utils.tensorboard import SummaryWriter
 import tqdm
 
@@ -17,20 +17,6 @@ def update_batch_size(model: nn.Module, batch_size: int):
         model.batch_size.set_batch_size(batch_size)
     for child in model.children():
         update_batch_size(child, batch_size)
-
-
-def load_checkpoint(model, optimizer, filename="checkpoint_step.pth"):
-    if os.path.isfile(filename):
-        print(f"Loading checkpoint '{filename}'")
-        checkpoint = torch.load(filename)
-        start_epoch = checkpoint["epoch"]
-        model.load_state_dict(checkpoint["model_state_dict"])
-        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-        print(f"Resumed from epoch {start_epoch}")
-        return model, optimizer, start_epoch
-    else:
-        print(f"No checkpoint found at '{filename}'")
-        return model, optimizer, 0
 
 
 def train():
@@ -71,7 +57,7 @@ def train():
     )
 
     writer = SummaryWriter(log_dir=log_dir)  # logs
-    scaler = torch.cuda.amp.GradScaler() if device.type == "cuda" else None
+    scaler = torch.amp.GradScaler() if device.type == "cuda" else None
 
     last_checkpoint = 500
     checkpoint_path = checkpoint_dir / f"checkpoint_step{last_checkpoint}.pth"
@@ -141,21 +127,18 @@ def train():
                 )
 
             if batch_size_idx % 500 == 0 and batch_size_idx > 0:
-                ckpt_path = checkpoint_dir / f"checkpoint_step{batch_size_idx}.pt"
-                torch.save(
-                    {
-                        "epoch": epoch,
-                        "batch_idx": batch_idx,
-                        "batch_count": batch_size_idx,
-                        "model_state_dict": model.state_dict(),
-                        "optimizer_state_dict": optimizer.state_dict(),
-                        "scheduler_state_dict": scheduler.state_dict(),
-                        "loss": loss,
-                        "scaler_state_dict": scaler.state_dict() if scaler else None,
-                    },
-                    ckpt_path,
+                checkpoint_file_path = checkpoint_dir / f"checkpoint_step{batch_size_idx}.pt"
+                save_checkpoint(
+                    model,
+                    optimizer,
+                    epoch,
+                    loss_val,
+                    batch_idx,
+                    batch_size_idx,
+                    checkpoint_file_path,
+                    scheduler,
+                    scaler,
                 )
-                print(f"💾 Saved checkpoint: {ckpt_path}")
 
 
 if __name__ == "__main__":
