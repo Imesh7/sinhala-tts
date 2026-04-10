@@ -10,15 +10,16 @@ import torchaudio.transforms as T
 from sinlib import Tokenizer
 from vocos import Vocos
 
+from utils import uniquify
 from zipvoice.utils.checkpoint import load_checkpoint
 from zipvoice.utils.common import prepare_audio_input
 from zipvoice.zipvoice import ZipVoice
 
 
 SAMPLE_RATE = 24000
-TRAIN_N_FFT = 1024
-TRAIN_HOP_LENGTH = 256
-TRAIN_TOP_DB = 80.0
+N_FFT = 1024
+HOP_LENGTH = 256
+TOP_DB = 80.0
 VOCOS_SAMPLE_RATE = 24000
 N_MELS = 100
 
@@ -49,24 +50,24 @@ def process_audio(file_path: Path, n_mels: int) -> torch.Tensor:
 
     mel_transform = T.MelSpectrogram(
         sample_rate=SAMPLE_RATE,
-        n_fft=TRAIN_N_FFT,
-        hop_length=TRAIN_HOP_LENGTH,
+        n_fft=N_FFT,
+        hop_length=HOP_LENGTH,
         n_mels=n_mels,
         power=2.0,
         normalized=True,
     )
-    mel_db_transform = T.AmplitudeToDB(top_db=TRAIN_TOP_DB)
+    mel_db_transform = T.AmplitudeToDB(top_db=TOP_DB)
 
     mel_spec = mel_transform(waveform)
     mel_spec = mel_db_transform(mel_spec)
-    mel_spec = (mel_spec + TRAIN_TOP_DB) / TRAIN_TOP_DB
+    mel_spec = (mel_spec + TOP_DB) / TOP_DB
     return mel_spec
 
 
 def normalized_db_to_vocos_features(mel: torch.Tensor) -> torch.Tensor:
     # This is only an approximate bridge. The training features should ideally
     # match Vocos' feature extractor exactly.
-    mel_db = mel * TRAIN_TOP_DB - TRAIN_TOP_DB
+    mel_db = mel * TOP_DB - TOP_DB
     mel_power = torch.pow(10.0, mel_db / 10.0)
     return torch.log(torch.clamp(mel_power, min=1e-7))
 
@@ -157,8 +158,9 @@ def run_inference(
             )
         audio = normalize_audio_for_save(audio)
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    torchaudio.save(str(output_path), audio.squeeze(1), VOCOS_SAMPLE_RATE)
+    # output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path = uniquify(output_path)
+    torchaudio.save(output_path, audio.squeeze(1), VOCOS_SAMPLE_RATE)
 
 
 def build_parser() -> argparse.ArgumentParser:

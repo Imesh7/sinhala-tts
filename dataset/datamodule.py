@@ -4,6 +4,7 @@ import torch.nn.functional as F
 
 from torch.utils.data import DataLoader
 from dataset.dataset import TTSDataset
+from train import VALIDATION_SET_PERCENTAGE
 
 
 class DataModule:
@@ -29,15 +30,34 @@ class DataModule:
             n_fft=n_fft,
             sample_rate=sample_rate,
         )
+        
+        dataloader_len = len(dataset)
+        val_set = int(dataloader_len * VALIDATION_SET_PERCENTAGE)
+        train_set = dataloader_len - val_set
 
-        return DataLoader(
-            dataset,
+        train_dataset, val_dataset = torch.utils.data.random_split(
+            dataset, [train_set, val_set]
+        )
+
+        train_dataloader = DataLoader(
+            train_dataset,
             batch_size=batch_size,
             shuffle=shuffle,
             num_workers=num_workers,
             collate_fn=tts_collate_fn,  # Important for variable lengths
             pin_memory=True if torch.cuda.is_available() else False,
         )
+        
+        val_dataloader = DataLoader(
+            val_dataset,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            num_workers=num_workers,
+            collate_fn=tts_collate_fn,  # Important for variable lengths
+            pin_memory=True if torch.cuda.is_available() else False,
+        )
+        
+        return train_dataloader, val_dataloader
 
 
 # Collate function to handle variable length sequences
