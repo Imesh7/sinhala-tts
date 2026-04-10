@@ -66,7 +66,8 @@ class ZipVoice(nn.Module):
         feature_lens: torch.Tensor,
         noise: torch.Tensor,
         t: torch.Tensor,
-        device: torch.device,
+        cfg_drop_ratio: float = 0.0,
+        device: torch.device = None,
     ) -> torch.Tensor:
         """
         t: the time step, with the shape (batch, 1, 1).
@@ -83,9 +84,16 @@ class ZipVoice(nn.Module):
             device=device,
         )
 
+        if cfg_drop_ratio > 0.0:
+            drop_mask = (
+                torch.rand(text_cond.size(0), 1, 1).to(device) > cfg_drop_ratio
+            )
+            
+            text_cond = text_cond * drop_mask
+
         condition_time_masked = condition_time_mask(
             features_lens=feature_lens,
-            mask_percent=(0.7, 0.9),
+            mask_percent=(0.7, 1.0),
             max_len=features.size(1),
         )
 
@@ -235,7 +243,7 @@ class ZipVoice(nn.Module):
         prompt_text_token_lens = torch.tensor(
             [len(t) for t in prompt_tokens], dtype=torch.int64, device=device
         )
-        
+
         text_token_lens = torch.tensor(
             [len(t) for t in tokens], dtype=torch.int64, device=device
         )
@@ -277,17 +285,24 @@ class ZipVoice(nn.Module):
             pad_mask=pad_masked,
             device=device,
         )
-        
+
         x1_wo_prompt_lens = (~pad_masked).sum(-1) - prompt_feature_lens
-        
-        x1_prompt = torch.zeros(x1.size(0), prompt_feature_lens.max(), x1.size(-1), device=device)
-        x1_wo_prompt = torch.zeros(x1.size(0), x1_wo_prompt_lens.max(), x1.size(-1), device=device)
-        
+
+        x1_prompt = torch.zeros(
+            x1.size(0), prompt_feature_lens.max(), x1.size(-1), device=device
+        )
+        x1_wo_prompt = torch.zeros(
+            x1.size(0), x1_wo_prompt_lens.max(), x1.size(-1), device=device
+        )
+
         for i in range(x1.size(0)):
-            x1_prompt[i, :prompt_feature_lens[i]] = x1[i, :prompt_feature_lens[i]]
-            x1_wo_prompt[i, :x1_wo_prompt_lens[i], :] = x1[i, prompt_feature_lens[i]: prompt_feature_lens[i] + x1_wo_prompt_lens[i]]
-            
-        return x1_wo_prompt,x1_wo_prompt_lens, x1_prompt, prompt_feature_lens
+            x1_prompt[i, : prompt_feature_lens[i]] = x1[i, : prompt_feature_lens[i]]
+            x1_wo_prompt[i, : x1_wo_prompt_lens[i], :] = x1[
+                i,
+                prompt_feature_lens[i] : prompt_feature_lens[i] + x1_wo_prompt_lens[i],
+            ]
+
+        return x1_wo_prompt, x1_wo_prompt_lens, x1_prompt, prompt_feature_lens
 
 
 def speech_infilling_masking(feature_lens: torch.Tensor, mask_ratio, spans=3):
