@@ -145,7 +145,7 @@ class ZipVoice(nn.Module):
         """
 
         token_pad = pad_labels(tokens, pad_id=0, device=device)
-        emb = self.emb(torch.tensor(token_pad, dtype=torch.int64).to(device))
+        emb = self.emb(token_pad)
 
         text_lengths = [len(token) for token in tokens]
         tokens_lens = torch.tensor(text_lengths, dtype=torch.int64, device=device)
@@ -228,7 +228,7 @@ class ZipVoice(nn.Module):
         speed: float = 1.0,
     ):
 
-        cat_tokens = [prompt_tokens[i] + tokens[i] for i in zip(tokens, prompt_tokens)]
+        cat_tokens = [prompt + token for prompt, token in zip(prompt_tokens, tokens)]
 
         cat_emb, cat_text_tokens = self.text_encode(tokens=cat_tokens, device=device)
 
@@ -244,7 +244,7 @@ class ZipVoice(nn.Module):
             (prompt_feature_lens / prompt_text_token_lens * text_token_lens / speed)
         ).to(dtype=torch.int64)
 
-        (text_cond, pad_mask) = self.text_conditioning(
+        (text_cond, pad_masked) = self.text_conditioning(
             text_emb=cat_emb,
             features_lens=features_lens,
             token_lens=cat_text_tokens,
@@ -258,7 +258,7 @@ class ZipVoice(nn.Module):
         )
 
         speech_condition_mask = pad_mask(
-            features_lens=features_lens, max_length=num_frames, device=device
+            lengths=features_lens, max_length=num_frames, device=device
         )
 
         speech_cond = torch.where(speech_condition_mask.unsqueeze(-1), 0, speech_cond)
@@ -274,14 +274,14 @@ class ZipVoice(nn.Module):
             x=x0,
             text_condition=text_cond,
             speech_condition=speech_cond,
-            pad_mask=pad_mask,
+            pad_mask=pad_masked,
             device=device,
         )
         
-        x1_wo_prompt_lens = (~pad_mask).sum(-1) - prompt_feature_lens
+        x1_wo_prompt_lens = (~pad_masked).sum(-1) - prompt_feature_lens
         
-        x1_prompt = torch.zeros_like(x1.size(0), prompt_feature_lens.max(), x1.size(-1), device=device)
-        x1_wo_prompt = torch.zeros_like(x1.size(0), x1_wo_prompt_lens.max(), x1.size(-1), device=device)
+        x1_prompt = torch.zeros(x1.size(0), prompt_feature_lens.max(), x1.size(-1), device=device)
+        x1_wo_prompt = torch.zeros(x1.size(0), x1_wo_prompt_lens.max(), x1.size(-1), device=device)
         
         for i in range(x1.size(0)):
             x1_prompt[i, :prompt_feature_lens[i]] = x1[i, :prompt_feature_lens[i]]

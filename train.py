@@ -12,6 +12,15 @@ from torch.utils.tensorboard import SummaryWriter
 import tqdm
 
 
+BATCH_SIZE = 32
+SAMPLE_RATE = 24000
+N_FFT = 1024
+HOP_LENGTH = 256
+TOP_DB = 80.0
+VOCOS_SAMPLE_RATE = 24000
+N_MELS = 100
+
+
 def update_batch_size(model: nn.Module, batch_size: int):
     if hasattr(model, "batch_size") and isinstance(model.batch_size, ScheduledFloat):
         model.batch_size.set_batch_size(batch_size)
@@ -33,7 +42,13 @@ def train():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dataloader = DataModule(file_path, tokenizer).dataloader(
-        batch_size=32
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+        num_workers=4,
+        n_mels=N_MELS,
+        hop_length=HOP_LENGTH,
+        n_fft=N_FFT,
+        sample_rate=SAMPLE_RATE,
     )  # Create a dataloader for the training data
 
     # If the dataloader is still empty, raise an error or handle it.
@@ -41,9 +56,9 @@ def train():
         print(f"Warning: Dataloader is empty. No audio files found in {file_path}.")
         return  # Exit or handle as appropriate
 
-    model = ZipVoice().to(device)  # Initialize the ZipVoice model
+    model = ZipVoice(feat_dim=N_MELS).to(device)  # Initialize the ZipVoice model
     # Training loop for the ZipVoice model
-    num_epochs = 10
+    num_epochs = 30
     batch_size_idx = 0
 
     # optimizer
@@ -127,7 +142,9 @@ def train():
                 )
 
             if batch_size_idx % 500 == 0 and batch_size_idx > 0:
-                checkpoint_file_path = checkpoint_dir / f"checkpoint_step{batch_size_idx}.pt"
+                checkpoint_file_path = (
+                    checkpoint_dir / f"checkpoint_step{batch_size_idx}.pt"
+                )
                 save_checkpoint(
                     model,
                     optimizer,

@@ -31,11 +31,11 @@ class EulerSolver:
             time_next = timestep[step + 1]
 
             v_t = self.model(
-                x,
+                x=x,
                 t=time_cur,
                 speech_condition=speech_condition,
                 text_condition=text_condition,
-                pad_mask=pad_mask,
+                padding_mask=pad_mask,
                 device=device,
             )
 
@@ -59,9 +59,9 @@ class EulerSolver:
     ) -> torch.Tensor:
         time_steps = torch.linspace(t_start, t_end, num_steps + 1).to(device)
 
-        timesteps = time_shift * timesteps / (1 + (time_shift - 1) * timesteps)
+        timesteps = time_shift * time_steps / (1 + (time_shift - 1) * time_steps)
 
-        return time_steps
+        return timesteps
 
 
 class DiffusionModel(torch.nn.Module):
@@ -78,8 +78,8 @@ class DiffusionModel(torch.nn.Module):
 
     def forward(
         self,
-        t: torch.Tensor,
         x: torch.Tensor,
+        t: torch.Tensor,
         text_condition: torch.Tensor,
         speech_condition: torch.Tensor,
         padding_mask: Optional[torch.Tensor] = None,
@@ -95,10 +95,10 @@ class DiffusionModel(torch.nn.Module):
         if (guidance_scale == 0.0).all():
             return self.model_func(
                 t=t,
-                xt=x,
-                text_condition=text_condition,
-                speech_condition=speech_condition,
-                padding_mask=padding_mask,
+                x_t=x,
+                text_cond=text_condition,
+                speech_cond=speech_condition,
+                pad_mask=padding_mask,
                 device=device,
             )
         else:
@@ -123,10 +123,10 @@ class DiffusionModel(torch.nn.Module):
 
             data_uncond, data_cond = self.model_func(
                 t=t,
-                xt=x,
-                text_condition=text_condition,
-                speech_condition=speech_condition,
-                padding_mask=padding_mask,
+                x_t=x,
+                text_cond=text_condition,
+                speech_cond=speech_condition,
+                pad_mask=padding_mask,
                 device=device,
             ).chunk(2, dim=0)
 

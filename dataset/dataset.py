@@ -13,10 +13,10 @@ class TTSDataset(Dataset):
         self,
         data_path,
         tokenizer,
-        sample_rate=22050,
-        n_mels=100, # This n_mels should match the feat_dim used in the ZipVoice model
-        hop_length=256,
-        n_fft=1024,
+        sample_rate: int = 24000,
+        n_mels: int = 100,  # This n_mels should match the feat_dim used in the ZipVoice model
+        hop_length: int = 256,
+        n_fft: int = 1024,
     ):
         self.data_path = Path(data_path)
         self.wav_dir = self.data_path / "wavs"
@@ -63,10 +63,10 @@ class TTSDataset(Dataset):
 
         # Convert to tensor and ensure shape [channels, time]
         waveform = torch.from_numpy(waveform_np).float()
-        if waveform.dim() == 2:                # stereo: [time, channels]
-            waveform = waveform.T              # -> [channels, time]
-        else:                                  # mono: [time]
-            waveform = waveform.unsqueeze(0)   # -> [1, time]
+        if waveform.dim() == 2:  # stereo: [time, channels]
+            waveform = waveform.T  # -> [channels, time]
+        else:  # mono: [time]
+            waveform = waveform.unsqueeze(0)  # -> [1, time]
 
         # Resample if needed
         if sr != self.sample_rate:
@@ -75,10 +75,10 @@ class TTSDataset(Dataset):
             waveform = self.resampler(waveform)
 
         # 3. Compute mel-spectrogram
-        mel_spec = self.mel_transform(waveform)          # [1, n_mels, time]
+        mel_spec = self.mel_transform(waveform)  # [1, n_mels, time]
         # Convert to dB scale (dynamic range 0 to -80 dB)
         mel_spec = torchaudio.transforms.AmplitudeToDB(top_db=80.0)(mel_spec)
-        mel_spec = mel_spec.squeeze(0)                   # [n_mels, time]
+        mel_spec = mel_spec.squeeze(0)  # [n_mels, time]
 
         # Normalize to [0,1] (assuming dB range -80..0)
         mel_spec = (mel_spec + 80) / 80

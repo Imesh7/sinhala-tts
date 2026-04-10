@@ -13,12 +13,17 @@ from zipvoice.zipformer.scaling import FloatLike, ScheduledFloat
 from zipvoice.zipformer.swosh_activation import Swoosh
 
 
-def time_embedding(t, dim):
+def time_embedding(timesteps, dim):
     half_dim = dim // 2
-    freqs = torch.exp(-math.log(10000) * torch.arange(half_dim, device=t.device) / half_dim)
-    args = t[:, None] * freqs[None, :]
-    emb = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
-    return emb
+    freqs = torch.exp(-math.log(10000) * torch.arange(half_dim,dtype=torch.float32, device=timesteps.device) / half_dim)
+    if timesteps.dim() == 2:
+        timesteps = timesteps.transpose(0, 1)  # (N, T) -> (T, N)
+
+    args = timesteps[..., None].float() * freqs[None]
+    embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
+    if dim % 2:
+        embedding = torch.cat([embedding, torch.zeros_like(embedding[..., :1])], dim=-1)
+    return embedding
 
 
 class Zipformer(nn.Module):

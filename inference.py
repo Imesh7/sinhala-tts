@@ -1,76 +1,185 @@
+import argparse
+import gc
 from pathlib import Path
 
 import librosa
+import torch
+import torch.nn.functional as F
+import torchaudio
+import torchaudio.transforms as T
 from sinlib import Tokenizer
 from vocos import Vocos
 
 from zipvoice.utils.checkpoint import load_checkpoint
 from zipvoice.utils.common import prepare_audio_input
 from zipvoice.zipvoice import ZipVoice
-import torch
-import torchaudio.transforms as T
 
 
-def inference():
-    prompt_text = "ඉන්දියාවේ ගුවන් සේවා සමාගම්වලට සහනයක්"
-    prompt_voice_file_path = ""
-    target_text = "නයක්"
-    tokenizer = Tokenizer.from_pretrained("Ransaka/sinlib")
-    # tokenize the text
-
-    prompt_text_tokens = tokenizer(prompt_text, return_tensors="pt")
-    target_text_tokens = tokenizer(target_text, return_tensors="pt")
-    
-    # load model from local checkpoint
-    model = ZipVoice()
-    model.eval()
-    
-    last_checkpoint = 500
-    checkpoint_dir = Path("/content/drive/MyDrive/sinhala-tts-checkpoints")
-    checkpoint_file_path = checkpoint_dir / f"checkpoint_step{last_checkpoint}.pth"
-    model , _, _ = load_checkpoint(model, None, checkpoint_file_path)
-
-    # vocoder
-    vocos = Vocos.from_pretrained("charactr/vocos-mel-24khz")
-    vocos.eval()
-    
-    feature_mel_spec = process_audio(prompt_voice_file_path)
-    prompt_features, prompt_feature_lens = prepare_audio_input(feature_mel_spec)
-    
-    x1_wo_prompt, x1_wo_prompt_lens, x1_prompt, prompt_feature_lens = model.sample(
-        tokens=target_text_tokens,
-        prompt_tokens=prompt_text_tokens,
-        prompt_features=prompt_features,
-        prompt_feature_lens=prompt_feature_lens,
-        speed=1.0,
-        device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
-    )
-    
-    pred_features = pred_features.permute(0, 2, 1)
-    
-    # wav = vocos.decode(pred_features).squeeze(1).clamp(-1, 1)
-    vocos.decode(x1_wo_prompt.cpu(), "output_with_prompt.wav")
+SAMPLE_RATE = 24000
+TRAIN_N_FFT = 1024
+TRAIN_HOP_LENGTH = 256
+TRAIN_TOP_DB = 80.0
+VOCOS_SAMPLE_RATE = 24000
+N_MELS = 100
 
 
-def process_audio(file_path):
-    # Load the audio file
-    waveform, sample_rate = librosa.load(file_path)
+def tokenize_text(tokenizer: Tokenizer, text: str) -> list[list[int]]:
+    return [tokenizer(text).input_ids]
 
-    # Resample if necessary
-    target_sample_rate = 22050
-    if sample_rate != target_sample_rate:
-        resampler = T.Resample(orig_freq=sample_rate, new_freq=target_sample_rate)
+
+# def infer_feat_dim_from_checkpoint(checkpoint_path: Path) -> int:
+#     checkpoint = torch.load(checkpoint_path, map_location="cpu")
+#     state_dict = checkpoint["model_state_dict"]
+#     out_proj_weight = state_dict["text_encoder.out_proj.weight"]
+#     return int(out_proj_weight.shape[0])
+
+
+def process_audio(file_path: Path, n_mels: int) -> torch.Tensor:
+    waveform_np, sample_rate = librosa.load(file_path, sr=None)
+    waveform = torch.from_numpy(waveform_np).float()
+
+    if waveform.dim() == 1:
+        waveform = waveform.unsqueeze(0)
+    elif waveform.size(0) > 1:
+        waveform = waveform.mean(dim=0, keepdim=True)
+
+    if sample_rate != SAMPLE_RATE:
+        resampler = T.Resample(orig_freq=sample_rate, new_freq=SAMPLE_RATE)
         waveform = resampler(waveform)
 
-    # Convert to mono if necessary
-    if waveform.shape[0] > 1:
-        waveform = torch.mean(waveform, dim=0, keepdim=True)
+    mel_transform = T.MelSpectrogram(
+        sample_rate=SAMPLE_RATE,
+        n_fft=TRAIN_N_FFT,
+        hop_length=TRAIN_HOP_LENGTH,
+        n_mels=n_mels,
+        power=2.0,
+        normalized=True,
+    )
+    mel_db_transform = T.AmplitudeToDB(top_db=TRAIN_TOP_DB)
 
-    mel_spectrogram = T.MelSpectrogram(sample_rate=target_sample_rate, n_mels=100)
-    mel_spec = mel_spectrogram(waveform)
+    mel_spec = mel_transform(waveform)
+    mel_spec = mel_db_transform(mel_spec)
+    mel_spec = (mel_spec + TRAIN_TOP_DB) / TRAIN_TOP_DB
     return mel_spec
 
+
+def normalized_db_to_vocos_features(mel: torch.Tensor) -> torch.Tensor:
+    # This is only an approximate bridge. The training features should ideally
+    # match Vocos' feature extractor exactly.
+    mel_db = mel * TRAIN_TOP_DB - TRAIN_TOP_DB
+    mel_power = torch.pow(10.0, mel_db / 10.0)
+    return torch.log(torch.clamp(mel_power, min=1e-7))
+
+
+def infer_vocos_mel_dim(vocos: Vocos) -> int:
+    for module in vocos.backbone.modules():
+        if isinstance(module, (torch.nn.Conv1d, torch.nn.ConvTranspose1d)):
+            return int(module.in_channels)
+    raise RuntimeError("Could not infer expected mel dimension from Vocos.")
+
+
+def adapt_mel_for_vocos(mel: torch.Tensor, expected_mels: int) -> torch.Tensor:
+    if mel.size(1) == expected_mels:
+        return mel
+
+    # Experimental compatibility bridge only. This avoids a hard crash when the
+    # TTS model and vocoder were trained with different mel dimensions, but it
+    # is not a substitute for a properly matched training/vocoder pipeline.
+    return F.interpolate(
+        mel.unsqueeze(1),
+        size=(expected_mels, mel.size(2)),
+        mode="bilinear",
+        align_corners=False,
+    ).squeeze(1)
+
+
+def normalize_audio_for_save(audio: torch.Tensor) -> torch.Tensor:
+    peak = audio.abs().max()
+    if torch.isclose(peak, torch.tensor(0.0, device=audio.device)):
+        return audio
+    return 0.95 * (audio / peak)
+
+
+def run_inference(
+    checkpoint_path: Path,
+    prompt_audio: Path,
+    prompt_text: str,
+    target_text: str,
+    output_path: Path,
+    speed: float = 1.0
+) -> None:
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        gc.collect()
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    tokenizer = Tokenizer.from_pretrained("Ransaka/sinlib")
+
+    prompt_text_tokens = tokenize_text(tokenizer, prompt_text)
+    target_text_tokens = tokenize_text(tokenizer, target_text)
+
+    # feat_dim = feat_dim or infer_feat_dim_from_checkpoint(checkpoint_path)
+    model = ZipVoice(feat_dim=N_MELS).to(device)
+    model.eval()
+    model, _, _ = load_checkpoint(model, None, str(checkpoint_path))
+    model.to(device)
+
+    vocos = Vocos.from_pretrained("charactr/vocos-mel-24khz").to(device)
+    vocos.eval()
+
+    feature_mel_spec = process_audio(prompt_audio, n_mels=N_MELS).to(device)
+    prompt_features, prompt_feature_lens = prepare_audio_input(
+        feature_mel_spec, device=device
+    )
+
+    with torch.no_grad():
+        generated_mel, _, _, _ = model.sample(
+            tokens=target_text_tokens,
+            prompt_tokens=prompt_text_tokens,
+            prompt_features=prompt_features,
+            prompt_feature_lens=prompt_feature_lens,
+            speed=speed,
+            device=device,
+        )
+
+        generated_mel = generated_mel.permute(0, 2, 1)
+        vocos_features = normalized_db_to_vocos_features(generated_mel)
+        vocos_mel_dim = infer_vocos_mel_dim(vocos)
+        vocos_features = adapt_mel_for_vocos(vocos_features, vocos_mel_dim)
+        audio = vocos.decode(vocos_features).cpu()
+        peak = audio.abs().max().item()
+        rms = audio.pow(2).mean().sqrt().item()
+        print(f"Decoded audio stats: peak={peak:.6f}, rms={rms:.6f}")
+        if peak < 1e-4:
+            print(
+                "Warning: decoded waveform is almost silent. This usually means the "
+                "TTS model output and vocoder features do not match."
+            )
+        audio = normalize_audio_for_save(audio)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    torchaudio.save(str(output_path), audio.squeeze(1), VOCOS_SAMPLE_RATE)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run Sinhala TTS inference.")
+    parser.add_argument("--checkpoint", type=Path, default=Path("/content/drive/My Drive/sinhala-tts-checkpoints/checkpoint_step_7500.pt"))
+    parser.add_argument("--prompt-audio", type=Path, default=Path("/content/drive/My Drive/audio.wav"))
+    parser.add_argument("--prompt-text", type=str, default="ඒක නිසා මම")
+    parser.add_argument("--target-text", type=str, default="ඒක නිසා මම")
+    parser.add_argument("--output", type=Path, default=Path("/content/drive/My Drive/generated_audio/output.wav"))
+    parser.add_argument("--speed", type=float, default=1.0)
+    return parser
+
+
 if __name__ == "__main__":
-    inference()
-    
-    
+    parser = build_parser()
+    args = parser.parse_args(args=[])
+    run_inference(
+        checkpoint_path=args.checkpoint,
+        prompt_audio=args.prompt_audio,
+        prompt_text=args.prompt_text,
+        target_text=args.target_text,
+        output_path=args.output,
+        speed=args.speed
+    )

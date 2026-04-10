@@ -11,8 +11,24 @@ class DataModule:
         self.data_path = data_path
         self.tokenizer = tokenizer
 
-    def dataloader(self, batch_size=32, shuffle=True, num_workers=2):
-        dataset = TTSDataset(self.data_path, self.tokenizer)
+    def dataloader(
+        self,
+        batch_size=32,
+        shuffle=True,
+        num_workers=2,
+        n_mels=100,
+        hop_length=256,
+        n_fft=1024,
+        sample_rate=24000,
+    ):
+        dataset = TTSDataset(
+            self.data_path,
+            self.tokenizer,
+            n_mels=n_mels,
+            hop_length=hop_length,
+            n_fft=n_fft,
+            sample_rate=sample_rate,
+        )
 
         return DataLoader(
             dataset,
@@ -22,7 +38,6 @@ class DataModule:
             collate_fn=tts_collate_fn,  # Important for variable lengths
             pin_memory=True if torch.cuda.is_available() else False,
         )
-    
 
 
 # Collate function to handle variable length sequences
@@ -36,7 +51,6 @@ def tts_collate_fn(batch):
     max_mel_len = max(mel_lengths)
     n_mels = batch[0]["mel_spec"].shape[0]
 
-
     # Pad mel specs
     mel_padded = torch.zeros(len(batch), n_mels, max_mel_len)
     for i, item in enumerate(batch):
@@ -49,4 +63,3 @@ def tts_collate_fn(batch):
         "mel_lengths": torch.tensor(mel_lengths),
         "texts": [item["text"] for item in batch],
     }
-
