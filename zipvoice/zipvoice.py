@@ -175,7 +175,7 @@ class ZipVoice(nn.Module):
         durations = [x + [num_frames - sum(x)] for x in durations]
         batch_size = len(durations)
 
-        ans = torch.zeros((batch_size, num_frames), dtype=torch.int64)
+        ans = torch.zeros((batch_size, num_frames), dtype=torch.int64, device=device)
 
         for b in range(batch_size):
             cur_frame = 0
@@ -192,9 +192,7 @@ class ZipVoice(nn.Module):
         device: torch.device,
     ):
         num_frames = int(features_lens.max())
-        print(
-            f"Num frames: {num_frames}, Text emb shape: {text_emb.shape}, Token lens shape: {token_lens.shape}, Features lens shape: {features_lens.shape}"
-        )
+
         avg_upsampled_durations = self.average_upsample(
             token_lens=token_lens, features_lens=features_lens
         )
@@ -202,7 +200,7 @@ class ZipVoice(nn.Module):
             durations=avg_upsampled_durations, num_frames=num_frames, device=device
         )
 
-        pad_mask = pad_mask(features_lens, num_frames, device=device)
+        pad_masked = pad_mask(features_lens, num_frames, device=device)
 
         text_condition = torch.gather(
             text_emb,
@@ -212,13 +210,11 @@ class ZipVoice(nn.Module):
             ),
         )  # [batch, num_frames, text_emb_dim]
 
-        return (text_condition, pad_mask)
+        return (text_condition, pad_masked)
 
     def average_upsample(self, token_lens: torch.Tensor, features_lens: torch.Tensor):
         res = []
-        print(
-            f"Token lens shape: {token_lens.shape}, Features lens shape: {features_lens.shape}"
-        )
+
         for i in range(len(features_lens)):
             avg_token_duration = features_lens[i] // token_lens[i]
             res.append(

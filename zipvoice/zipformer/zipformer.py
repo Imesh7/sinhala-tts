@@ -165,18 +165,18 @@ class DownsampledZipformerEncoder(nn.Module):
 
         x_original = x
         x = self.downsample(x)
-        
+
         ds = self.downsample_factor
-        
+
         if time_emb is not None and time_emb.dim() == 3:
             time_emb = time_emb[::ds]
-        if attn_mask is not None:
-            attn_mask = attn_mask[::ds, ::ds]
+        if atten_mask is not None:
+            atten_mask = atten_mask[::ds, ::ds]
         if padding_mask is not None:
             padding_mask = padding_mask[..., ::ds]
         x = self.encoder_layer(x, time_emb, atten_mask=atten_mask, padding_mask=padding_mask, device=device)
         x = self.upsample(x)
-        
+
         x = x[: x_original.shape[0]]
 
         return self.bypass(x_original, x)
@@ -285,7 +285,6 @@ class ZipformerBlock(nn.Module):
         feed_forward_dim: int = 768,
     ):
         super().__init__()
-        print("Initializing ZipformerBlock with encoder_dim:", encoder_dim)
         self.self_atten_weights = RelativePositionalMultiHeadAttention(
             emb_dim=encoder_dim,
             num_heads=num_heads,

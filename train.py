@@ -17,7 +17,7 @@ from torch.utils.tensorboard import SummaryWriter
 import tqdm
 from vocos import Vocos
 
-BATCH_SIZE = 32
+BATCH_SIZE = 4
 SAMPLE_RATE = 24000
 N_FFT = 1024
 HOP_LENGTH = 256
@@ -25,6 +25,7 @@ TOP_DB = 80.0
 VOCOS_SAMPLE_RATE = 24000
 N_MELS = 100
 VALIDATION_SET_PERCENTAGE = 0.1
+ACCUMULATION_STEPS = 8
 
 
 def update_batch_size(model: nn.Module, batch_size: int):
@@ -79,7 +80,7 @@ def train():
         optimizer,
         max_lr=1e-4,
         epochs=num_epochs,
-        steps_per_epoch=len(train_dataloader),
+        steps_per_epoch=len(train_dataloader) // ACCUMULATION_STEPS ,
         pct_start=0.1,  # Warm up 10% of training
     )
 
@@ -97,7 +98,9 @@ def train():
 
     for epoch in tqdm(range(start_epoch, num_epochs)):
         model.train()
+        optimizer.zero_grad() 
         epoch_losses = []
+        
         for batch_idx, batch_data in enumerate(train_dataloader):
             mel_spec = batch_data["mel_specs"].to(device)
             text_tokens = batch_data["text_tokens"]
@@ -112,71 +115,80 @@ def train():
 
             loss = model(
                 text_tokens, features, feature_lens, noise=noise, t=t,cfg_drop_ratio=cfg_drop_ratio, device=device
-            )  # Forward pass with noise
+            )  # Forward pass with noise            
 
             update_batch_size(
                 model, batch_size=batch_size_idx
             )  # Update batch size for ScheduledFloat
-            batch_size_idx += 1
-
-            optimizer.zero_grad(set_to_none=True)
+            # batch_size_idx += 1
 
             if scaler:
                 scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                scaler.step(optimizer)
-                scaler.update()
+                # scaler.unscale_(optimizer)
+                # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                # scaler.step(optimizer)
+                # scaler.update()
             else:
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                optimizer.step()
-
-            scheduler.step()
+                # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                # optimizer.step()
 
             loss_val = loss.item()
-            epoch_losses.append(loss_val)
-            writer.add_scalar("Loss/train", loss_val, batch_size_idx)
-            writer.add_scalar("LR", scheduler.get_last_lr()[0], batch_size_idx)
+            
+            # Update weights only every N steps
+            if (batch_idx + 1) % ACCUMULATION_STEPS == 0:
+                if scaler:
+                    scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                
+                if scaler:
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    optimizer.step()
+                
+                optimizer.zero_grad(set_to_none=True)
+                scheduler.step()
+                batch_size_idx += 1
 
+                epoch_losses.append(loss_val)
+                writer.add_scalar("Loss/train", loss_val, batch_size_idx)
+                writer.add_scalar("LR", scheduler.get_last_lr()[0], batch_size_idx)
+
+                
+                if batch_size_idx % 500 == 0:
+                    checkpoint_file_path = (
+                        checkpoint_dir / f"checkpoint_step{batch_size_idx}.pt"
+                    )
+                    save_checkpoint(
+                        model,
+                        optimizer,
+                        epoch,
+                        loss_val,
+                        batch_idx,
+                        batch_size_idx,
+                        checkpoint_file_path,
+                        scheduler,
+                        scaler,
+                    )
+                
             # Print every 10 batches
             if batch_idx % 10 == 0:
-                avg_loss = sum(epoch_losses[-10:]) / len(epoch_losses[-10:])
+                avg_loss = sum(epoch_losses[-10:]) / max(len(epoch_losses[-10:]), 1)
                 print(
                     f"Epoch [{epoch+1}/{num_epochs}] "
                     f"Batch [{batch_idx}/{len(train_dataloader)}] "
                     f"Loss: {loss_val:.4f} (avg: {avg_loss:.4f}) "
                     f"LR: {scheduler.get_last_lr()[0]:.2e}"
-                )
-
-            if batch_idx % 10 == 0:
-                print(
-                    f"Epoch [{epoch+1}/{num_epochs}], Batch [{batch_idx+1}/{len(train_dataloader)}], Loss: {loss_val.item():.4f}"
-                )
-
-            if batch_size_idx % 500 == 0 and batch_size_idx > 0:
-                validation_output(
+                )  
+                    
+        validation_output(
                     model=model,
                     epoch=epoch,
                     val_dataloader=val_dataloader,
                     writer=writer,
                     device=device
-                )
-                checkpoint_file_path = (
-                    checkpoint_dir / f"checkpoint_step{batch_size_idx}.pt"
-                )
-                save_checkpoint(
-                    model,
-                    optimizer,
-                    epoch,
-                    loss_val,
-                    batch_idx,
-                    batch_size_idx,
-                    checkpoint_file_path,
-                    scheduler,
-                    scaler,
-                )
-                
+                ) 
         sampling_during_training(model, tokenizer, vocos, device)
 
 
@@ -193,7 +205,7 @@ def validation_output(model, epoch, val_dataloader, writer, device: torch.device
 
             features, feature_lens = prepare_audio_input(mel_spec, device=device)
 
-            t = sampling_time(batch_size, device=device, is_training=True)
+            t = sampling_time(batch_size, device=device)
 
             noise = torch.randn_like(features).to(device)  # random noise
 
