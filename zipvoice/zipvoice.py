@@ -85,10 +85,8 @@ class ZipVoice(nn.Module):
         )
 
         if cfg_drop_ratio > 0.0:
-            drop_mask = (
-                torch.rand(text_cond.size(0), 1, 1).to(device) > cfg_drop_ratio
-            )
-            
+            drop_mask = torch.rand(text_cond.size(0), 1, 1).to(device) > cfg_drop_ratio
+
             text_cond = text_cond * drop_mask
 
         condition_time_masked = condition_time_mask(
