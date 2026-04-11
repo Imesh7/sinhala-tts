@@ -98,7 +98,7 @@ def train():
 
     for epoch in tqdm(range(start_epoch, num_epochs)):
         model.train()
-        optimizer.zero_grad() 
+        optimizer.zero_grad()
         epoch_losses = []
         
         for batch_idx, batch_data in enumerate(train_dataloader):

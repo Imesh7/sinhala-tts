@@ -56,12 +56,13 @@ def process_audio(file_path: Path, n_mels: int) -> torch.Tensor:
         power=2.0,
         normalized=True,
     )
-    mel_db_transform = T.AmplitudeToDB(top_db=TOP_DB)
-
-    mel_spec = mel_transform(waveform)
-    mel_spec = mel_db_transform(mel_spec)
-    mel_spec = (mel_spec + TOP_DB) / TOP_DB
-    return mel_spec
+    
+    # 3. Compute mel-spectrogram
+    mel_spec = mel_transform(waveform)  # [1, n_mels, time]
+    
+    mel_log = torch.log(torch.clamp(mel_spec, min=1e-7))  # [1, n_mels, time]
+    mel_log = mel_log.squeeze(0)  # [n_mels, time]
+    return mel_log
 
 
 def normalized_db_to_vocos_features(mel: torch.Tensor) -> torch.Tensor:
@@ -144,10 +145,8 @@ def run_inference(
         )
 
         generated_mel = generated_mel.permute(0, 2, 1)
-        vocos_features = normalized_db_to_vocos_features(generated_mel)
-        vocos_mel_dim = infer_vocos_mel_dim(vocos)
-        vocos_features = adapt_mel_for_vocos(vocos_features, vocos_mel_dim)
-        audio = vocos.decode(vocos_features).cpu()
+        audio = vocos.decode(generated_mel).cpu()
+        
         peak = audio.abs().max().item()
         rms = audio.pow(2).mean().sqrt().item()
         print(f"Decoded audio stats: peak={peak:.6f}, rms={rms:.6f}")

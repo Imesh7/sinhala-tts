@@ -7,7 +7,6 @@ import librosa
 import torchaudio
 import torchaudio.transforms as T
 
-
 class TTSDataset(Dataset):
     def __init__(
         self,
@@ -76,16 +75,14 @@ class TTSDataset(Dataset):
 
         # 3. Compute mel-spectrogram
         mel_spec = self.mel_transform(waveform)  # [1, n_mels, time]
-        # Convert to dB scale (dynamic range 0 to -80 dB)
-        mel_spec = torchaudio.transforms.AmplitudeToDB(top_db=80.0)(mel_spec)
-        mel_spec = mel_spec.squeeze(0)  # [n_mels, time]
-
-        # Normalize to [0,1] (assuming dB range -80..0)
-        mel_spec = (mel_spec + 80) / 80
+        
+        # Convert to log-mel (natural log)
+        mel_log = torch.log(torch.clamp(mel_spec, min=1e-7))  # [1, n_mels, time]
+        mel_log = mel_log.squeeze(0)  # [n_mels, time]
 
         return {
             "text_tokens": torch.tensor(text_tokens, dtype=torch.long),
-            "mel_spec": mel_spec,
+            "mel_spec": mel_log,
             "text": text,
             "filename": wav_filename,
         }
