@@ -256,10 +256,8 @@ def sampling_during_training(model:ZipVoice, tokenizer:Tokenizer,vocos: Vocos, d
         )
 
         generated_mel = generated_mel.permute(0, 2, 1)
-        vocos_features = normalized_db_to_vocos_features(generated_mel)
-        vocos_mel_dim = infer_vocos_mel_dim(vocos)
-        vocos_features = adapt_mel_for_vocos(vocos_features, vocos_mel_dim)
-        audio = vocos.decode(vocos_features).cpu()
+        
+        audio = vocos.decode(generated_mel).cpu()
         peak = audio.abs().max().item()
         rms = audio.pow(2).mean().sqrt().item()
         print(f"Decoded audio stats: peak={peak:.6f}, rms={rms:.6f}")

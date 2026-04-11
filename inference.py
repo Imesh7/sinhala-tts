@@ -28,13 +28,6 @@ def tokenize_text(tokenizer: Tokenizer, text: str) -> list[list[int]]:
     return [tokenizer(text).input_ids]
 
 
-# def infer_feat_dim_from_checkpoint(checkpoint_path: Path) -> int:
-#     checkpoint = torch.load(checkpoint_path, map_location="cpu")
-#     state_dict = checkpoint["model_state_dict"]
-#     out_proj_weight = state_dict["text_encoder.out_proj.weight"]
-#     return int(out_proj_weight.shape[0])
-
-
 def process_audio(file_path: Path, n_mels: int) -> torch.Tensor:
     waveform_np, sample_rate = librosa.load(file_path, sr=None)
     waveform = torch.from_numpy(waveform_np).float()
@@ -64,35 +57,6 @@ def process_audio(file_path: Path, n_mels: int) -> torch.Tensor:
     mel_log = mel_log.squeeze(0)  # [n_mels, time]
     return mel_log
 
-
-def normalized_db_to_vocos_features(mel: torch.Tensor) -> torch.Tensor:
-    # This is only an approximate bridge. The training features should ideally
-    # match Vocos' feature extractor exactly.
-    mel_db = mel * TOP_DB - TOP_DB
-    mel_power = torch.pow(10.0, mel_db / 10.0)
-    return torch.log(torch.clamp(mel_power, min=1e-7))
-
-
-def infer_vocos_mel_dim(vocos: Vocos) -> int:
-    for module in vocos.backbone.modules():
-        if isinstance(module, (torch.nn.Conv1d, torch.nn.ConvTranspose1d)):
-            return int(module.in_channels)
-    raise RuntimeError("Could not infer expected mel dimension from Vocos.")
-
-
-def adapt_mel_for_vocos(mel: torch.Tensor, expected_mels: int) -> torch.Tensor:
-    if mel.size(1) == expected_mels:
-        return mel
-
-    # Experimental compatibility bridge only. This avoids a hard crash when the
-    # TTS model and vocoder were trained with different mel dimensions, but it
-    # is not a substitute for a properly matched training/vocoder pipeline.
-    return F.interpolate(
-        mel.unsqueeze(1),
-        size=(expected_mels, mel.size(2)),
-        mode="bilinear",
-        align_corners=False,
-    ).squeeze(1)
 
 
 def normalize_audio_for_save(audio: torch.Tensor) -> torch.Tensor:
