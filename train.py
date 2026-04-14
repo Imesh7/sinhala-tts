@@ -1,21 +1,22 @@
-import gc
+﻿import gc
 from pathlib import Path
 
+import torch
+import torch.nn as nn
 import torchaudio
+from sinlib import Tokenizer
+from torch.utils.tensorboard import SummaryWriter
+from tqdm import tqdm
+from vocos import Vocos
 
 from dataset.datamodule import DataModule
-from inference import adapt_mel_for_vocos, infer_vocos_mel_dim, normalize_audio_for_save, normalized_db_to_vocos_features, process_audio, tokenize_text
+from inference import normalize_audio_for_save, process_audio, tokenize_text
 from utils import uniquify
 from zipvoice.utils.checkpoint import load_checkpoint, save_checkpoint
 from zipvoice.utils.common import prepare_audio_input, sampling_time
 from zipvoice.zipformer.scaling import ScheduledFloat
 from zipvoice.zipvoice import ZipVoice
-import torch
-import torch.nn as nn
-from sinlib import Tokenizer
-from torch.utils.tensorboard import SummaryWriter
-import tqdm
-from vocos import Vocos
+
 
 BATCH_SIZE = 4
 SAMPLE_RATE = 24000
@@ -36,7 +37,6 @@ def update_batch_size(model: nn.Module, batch_size: int):
 
 
 def train():
-
     dataset_base_path = Path("/content/drive/MyDrive/nirvana_dataset")
     file_path = dataset_base_path
 
@@ -46,9 +46,8 @@ def train():
     log_dir.mkdir(exist_ok=True)
 
     tokenizer = Tokenizer.from_pretrained("Ransaka/sinlib")
-    
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
+
     vocos = Vocos.from_pretrained("charactr/vocos-mel-24khz").to(device)
     vocos.eval()
 
@@ -60,93 +59,77 @@ def train():
         hop_length=HOP_LENGTH,
         n_fft=N_FFT,
         sample_rate=SAMPLE_RATE,
-    )  # Create a dataloader for the training data
+    )
 
-    # If the dataloader is still empty, raise an error or handle it.
     if len(train_dataloader) == 0:
-        print(
-            f"Warning: Training dataloader is empty. No audio files found in {file_path}."
-        )
-        return  # Exit or handle as appropriate
+        print(f"Warning: Training dataloader is empty. No audio files found in {file_path}.")
+        return
 
-    model = ZipVoice(feat_dim=N_MELS).to(device)  # Initialize the ZipVoice model
-    # Training loop for the ZipVoice model
+    model = ZipVoice(feat_dim=N_MELS).to(device)
     num_epochs = 30
     batch_size_idx = 0
 
-    # optimizer
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-6)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
         max_lr=1e-4,
         epochs=num_epochs,
-        steps_per_epoch=len(train_dataloader) // ACCUMULATION_STEPS ,
-        pct_start=0.1,  # Warm up 10% of training
+        steps_per_epoch=max(1, len(train_dataloader) // ACCUMULATION_STEPS),
+        pct_start=0.1,
     )
 
-    writer = SummaryWriter(log_dir=log_dir)  # logs
+    writer = SummaryWriter(log_dir=log_dir)
     scaler = torch.amp.GradScaler() if device.type == "cuda" else None
 
     last_checkpoint = 500
     checkpoint_path = checkpoint_dir / f"checkpoint_step{last_checkpoint}.pth"
-
-    # Fix: Pass the correct path to load_checkpoint
-    model, optimizer, start_epoch = load_checkpoint(
-        model, optimizer, str(checkpoint_path)
-    )
+    model, optimizer, start_epoch = load_checkpoint(model, optimizer, str(checkpoint_path))
     cfg_drop_ratio = 0.2
 
     for epoch in tqdm(range(start_epoch, num_epochs)):
         model.train()
         optimizer.zero_grad()
         epoch_losses = []
-        
+
         for batch_idx, batch_data in enumerate(train_dataloader):
             mel_spec = batch_data["mel_specs"].to(device)
             text_tokens = batch_data["text_tokens"]
-
             batch_size = mel_spec.size(0)
 
             features, feature_lens = prepare_audio_input(mel_spec, device=device)
-
             t = sampling_time(batch_size, device=device, is_training=True)
-
-            noise = torch.randn_like(features).to(device)  # random noise
+            noise = torch.randn_like(features).to(device)
 
             loss = model(
-                text_tokens, features, feature_lens, noise=noise, t=t,cfg_drop_ratio=cfg_drop_ratio, device=device
-            )  # Forward pass with noise            
+                text_tokens,
+                features,
+                feature_lens,
+                noise=noise,
+                t=t,
+                cfg_drop_ratio=cfg_drop_ratio,
+                device=device,
+            )
 
-            update_batch_size(
-                model, batch_size=batch_size_idx
-            )  # Update batch size for ScheduledFloat
-            # batch_size_idx += 1
+            update_batch_size(model, batch_size=batch_size_idx)
 
             if scaler:
                 scaler.scale(loss).backward()
-                # scaler.unscale_(optimizer)
-                # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                # scaler.step(optimizer)
-                # scaler.update()
             else:
                 loss.backward()
-                # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                # optimizer.step()
 
             loss_val = loss.item()
-            
-            # Update weights only every N steps
+
             if (batch_idx + 1) % ACCUMULATION_STEPS == 0:
                 if scaler:
                     scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                
+
                 if scaler:
                     scaler.step(optimizer)
                     scaler.update()
                 else:
                     optimizer.step()
-                
+
                 optimizer.zero_grad(set_to_none=True)
                 scheduler.step()
                 batch_size_idx += 1
@@ -155,11 +138,8 @@ def train():
                 writer.add_scalar("Loss/train", loss_val, batch_size_idx)
                 writer.add_scalar("LR", scheduler.get_last_lr()[0], batch_size_idx)
 
-                
                 if batch_size_idx % 500 == 0:
-                    checkpoint_file_path = (
-                        checkpoint_dir / f"checkpoint_step{batch_size_idx}.pt"
-                    )
+                    checkpoint_file_path = checkpoint_dir / f"checkpoint_step{batch_size_idx}.pt"
                     save_checkpoint(
                         model,
                         optimizer,
@@ -171,46 +151,47 @@ def train():
                         scheduler,
                         scaler,
                     )
-                
-            # Print every 10 batches
+
             if batch_idx % 10 == 0:
                 avg_loss = sum(epoch_losses[-10:]) / max(len(epoch_losses[-10:]), 1)
                 print(
-                    f"Epoch [{epoch+1}/{num_epochs}] "
+                    f"Epoch [{epoch + 1}/{num_epochs}] "
                     f"Batch [{batch_idx}/{len(train_dataloader)}] "
                     f"Loss: {loss_val:.4f} (avg: {avg_loss:.4f}) "
                     f"LR: {scheduler.get_last_lr()[0]:.2e}"
-                )  
-                    
+                )
+
         validation_output(
-                    model=model,
-                    epoch=epoch,
-                    val_dataloader=val_dataloader,
-                    writer=writer,
-                    device=device
-                ) 
-        sampling_during_training(model, tokenizer, vocos, device)
+            model=model,
+            epoch=epoch,
+            val_dataloader=val_dataloader,
+            writer=writer,
+            device=device,
+        )
+        sampling_during_training(model, tokenizer, vocos, device, checkpoint_dir)
 
 
 def validation_output(model, epoch, val_dataloader, writer, device: torch.device):
-
     model.eval()
     val_losses = []
     with torch.no_grad():
-        for batch_idx, batch_data in enumerate(val_dataloader):
+        for batch_data in val_dataloader:
             mel_spec = batch_data["mel_specs"].to(device)
-            text_tokens = batch_data["text_tokens"].to(device)
-
+            text_tokens = batch_data["text_tokens"]
             batch_size = mel_spec.size(0)
 
             features, feature_lens = prepare_audio_input(mel_spec, device=device)
-
             t = sampling_time(batch_size, device=device)
 
             noise = torch.randn_like(features).to(device)  # random noise
 
             val_loss = model(
-                text_tokens, features, feature_lens, noise=noise, t=t, device=device
+                text_tokens,
+                features,
+                feature_lens,
+                noise=noise,
+                t=t,
+                device=device,
             )
 
             val_losses.append(val_loss.item())
@@ -219,14 +200,20 @@ def validation_output(model, epoch, val_dataloader, writer, device: torch.device
     writer.add_scalar("Loss/val", avg_val_loss, epoch)
     print(f"Validation Loss: {avg_val_loss:.4f}")
     model.train()
-    
-    
-def sampling_during_training(model:ZipVoice, tokenizer:Tokenizer,vocos: Vocos, device:torch.device):
-    
+
+
+def sampling_during_training(
+    model: ZipVoice,
+    tokenizer: Tokenizer,
+    vocos: Vocos,
+    device: torch.device,
+    checkpoint_dir: Path,
+):
     prompt_text = "ඒක නිසා මම"
     target_text = "ඔබට කොහොමද ඉන්නේ"
     prompt_audio = Path("/content/drive/My Drive/audio.wav")
-    
+    output_path = checkpoint_dir / "training_sample.wav"
+
     model.eval()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -239,11 +226,9 @@ def sampling_during_training(model:ZipVoice, tokenizer:Tokenizer,vocos: Vocos, d
     target_text_tokens = tokenize_text(tokenizer, target_text)
 
     model.to(device)
-  
-    feature_mel_spec = process_audio(prompt_audio, n_mels=N_MELS).to(device)
-    prompt_features, prompt_feature_lens = prepare_audio_input(
-        feature_mel_spec, device=device
-    )
+
+    feature_mel_spec = process_audio(prompt_audio, n_mels=N_MELS).unsqueeze(0).to(device)
+    prompt_features, prompt_feature_lens = prepare_audio_input(feature_mel_spec, device=device)
 
     with torch.no_grad():
         generated_mel, _, _, _ = model.sample(
@@ -256,7 +241,6 @@ def sampling_during_training(model:ZipVoice, tokenizer:Tokenizer,vocos: Vocos, d
         )
 
         generated_mel = generated_mel.permute(0, 2, 1)
-        
         audio = vocos.decode(generated_mel).cpu()
         peak = audio.abs().max().item()
         rms = audio.pow(2).mean().sqrt().item()
@@ -268,10 +252,10 @@ def sampling_during_training(model:ZipVoice, tokenizer:Tokenizer,vocos: Vocos, d
             )
         audio = normalize_audio_for_save(audio)
 
-    # output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path = uniquify(output_path)
+    output_path = Path(uniquify(str(output_path)))
     torchaudio.save(output_path, audio.squeeze(1), VOCOS_SAMPLE_RATE)
     model.train()
+
 
 if __name__ == "__main__":
     train()

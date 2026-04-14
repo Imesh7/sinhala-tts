@@ -1,10 +1,9 @@
-import argparse
+﻿import argparse
 import gc
 from pathlib import Path
 
 import librosa
 import torch
-import torch.nn.functional as F
 import torchaudio
 import torchaudio.transforms as T
 from sinlib import Tokenizer
@@ -58,7 +57,6 @@ def process_audio(file_path: Path, n_mels: int) -> torch.Tensor:
     return mel_log
 
 
-
 def normalize_audio_for_save(audio: torch.Tensor) -> torch.Tensor:
     peak = audio.abs().max()
     if torch.isclose(peak, torch.tensor(0.0, device=audio.device)):
@@ -72,7 +70,7 @@ def run_inference(
     prompt_text: str,
     target_text: str,
     output_path: Path,
-    speed: float = 1.0
+    speed: float = 1.0,
 ) -> None:
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -84,7 +82,6 @@ def run_inference(
     prompt_text_tokens = tokenize_text(tokenizer, prompt_text)
     target_text_tokens = tokenize_text(tokenizer, target_text)
 
-    # feat_dim = feat_dim or infer_feat_dim_from_checkpoint(checkpoint_path)
     model = ZipVoice(feat_dim=N_MELS).to(device)
     model.eval()
     model, _, _ = load_checkpoint(model, None, str(checkpoint_path))
@@ -93,10 +90,8 @@ def run_inference(
     vocos = Vocos.from_pretrained("charactr/vocos-mel-24khz").to(device)
     vocos.eval()
 
-    feature_mel_spec = process_audio(prompt_audio, n_mels=N_MELS).to(device)
-    prompt_features, prompt_feature_lens = prepare_audio_input(
-        feature_mel_spec, device=device
-    )
+    feature_mel_spec = process_audio(prompt_audio, n_mels=N_MELS).unsqueeze(0).to(device)
+    prompt_features, prompt_feature_lens = prepare_audio_input(feature_mel_spec, device=device)
 
     with torch.no_grad():
         generated_mel, _, _, _ = model.sample(
@@ -110,7 +105,7 @@ def run_inference(
 
         generated_mel = generated_mel.permute(0, 2, 1)
         audio = vocos.decode(generated_mel).cpu()
-        
+
         peak = audio.abs().max().item()
         rms = audio.pow(2).mean().sqrt().item()
         print(f"Decoded audio stats: peak={peak:.6f}, rms={rms:.6f}")
@@ -121,18 +116,25 @@ def run_inference(
             )
         audio = normalize_audio_for_save(audio)
 
-    # output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path = uniquify(output_path)
+    output_path = Path(uniquify(str(output_path)))
     torchaudio.save(output_path, audio.squeeze(1), VOCOS_SAMPLE_RATE)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run Sinhala TTS inference.")
-    parser.add_argument("--checkpoint", type=Path, default=Path("/content/drive/My Drive/sinhala-tts-checkpoints/checkpoint_step_7500.pt"))
+    parser.add_argument(
+        "--checkpoint",
+        type=Path,
+        default=Path("/content/drive/My Drive/sinhala-tts-checkpoints/checkpoint_step_7500.pt"),
+    )
     parser.add_argument("--prompt-audio", type=Path, default=Path("/content/drive/My Drive/audio.wav"))
     parser.add_argument("--prompt-text", type=str, default="ඒක නිසා මම")
     parser.add_argument("--target-text", type=str, default="ඒක නිසා මම")
-    parser.add_argument("--output", type=Path, default=Path("/content/drive/My Drive/generated_audio/output.wav"))
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("/content/drive/My Drive/generated_audio/output.wav"),
+    )
     parser.add_argument("--speed", type=float, default=1.0)
     return parser
 
@@ -146,5 +148,5 @@ if __name__ == "__main__":
         prompt_text=args.prompt_text,
         target_text=args.target_text,
         output_path=args.output,
-        speed=args.speed
+        speed=args.speed,
     )
