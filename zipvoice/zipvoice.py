@@ -100,8 +100,8 @@ class ZipVoice(nn.Module):
         # x_1 -> target
         # x_0 -> noise
         # x_t -> predicted noise
-        x_t = t * features + (1 - t) * noise
-        u_t = x_t - noise
+        x_t = t * features + noise * (1 - t)
+        u_t = features - noise
 
         while t.dim() > 1 and t.size(-1) == 1:
             t = t.squeeze(-1)
