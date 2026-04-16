@@ -6,6 +6,8 @@ import torch
 import torchaudio
 import torchaudio.transforms as T
 from torch.utils.data import Dataset
+from numpy import np
+
 
 class TTSDataset(Dataset):
     def __init__(
@@ -36,7 +38,7 @@ class TTSDataset(Dataset):
             n_fft=n_fft,
             hop_length=hop_length,
             n_mels=n_mels,
-            power=2.0,
+            power=1.0,
             normalized=True,
         )
         self.resampler = None
@@ -69,8 +71,8 @@ class TTSDataset(Dataset):
             waveform = self.resampler(waveform)
 
         mel_spec = self.mel_transform(waveform)
-        mel_log = torch.log(torch.clamp(mel_spec, min=1e-7))
-        mel_log = mel_log.squeeze(0)
+        logmel = mel_spec.clamp(min=1e-7).log()
+        mel_log = logmel.squeeze(0)
 
         return {
             "text_tokens": text_tokens,
