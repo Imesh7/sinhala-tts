@@ -1,4 +1,5 @@
-﻿import gc
+﻿from copy import copy
+import gc
 from pathlib import Path
 
 import torch
@@ -85,6 +86,9 @@ def train():
     checkpoint_path = checkpoint_dir / f"checkpoint_step{last_checkpoint}.pth"
     model, optimizer, start_epoch = load_checkpoint(model, optimizer, str(checkpoint_path))
     cfg_drop_ratio = 0.2
+    
+    model_avg = copy.deepcopy(model)
+    model_avg.requires_grad_(False)
 
     for epoch in tqdm(range(start_epoch, num_epochs)):
         model.train()
@@ -129,7 +133,9 @@ def train():
                     scaler.update()
                 else:
                     optimizer.step()
-
+                    
+                update_ema(model, model_avg)
+                
                 optimizer.zero_grad(set_to_none=True)
                 scheduler.step()
                 batch_size_idx += 1
@@ -168,7 +174,14 @@ def train():
             writer=writer,
             device=device,
         )
-        sampling_during_training(model, tokenizer, vocos, device, checkpoint_dir)
+        sampling_during_training(model_avg, tokenizer, vocos, device, checkpoint_dir)
+
+# Expotential Moving Average (EMA) update for model parameters
+def update_ema(model, model_avg, decay=0.999):
+    with torch.no_grad():
+        for p, p_avg in zip(model.parameters(), model_avg.parameters()):
+            # p_avg.data.lerp_(p.data, 1-decay)  # p_avg = decay*p_avg + (1-decay)*p
+            p_avg.data.mul_(decay).add_(p.data, alpha=1-decay)
 
 
 def validation_output(model, epoch, val_dataloader, writer, device: torch.device):
