@@ -36,5 +36,4 @@ istalled dependecy add to local enviornment
 uv add package_name
 ```
 
-Tokenizer
-vocos
+- Tokenizer (used sinlib)
