@@ -1,6 +1,5 @@
  # Sinhala tts
 
-
 <p align="center">
   <a href="https://huggingface.co/imesh7/sinhala-tts">
     <img src="https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Model-FFD21E" alt="Hugging Face Model">
@@ -15,25 +14,30 @@
   </a>
 </p>
 
+TTS model for Sinhala Langauge.
 
- It used uv as package manager.
+## Features
+- Voice cloning
+- Text-To-Speech (TTS) model
  
 #### Setup project
+It used uv as package manager.
 
 ```
 uv sync
 ```
 
-#### Dependencies
 
-install new depency
-```
-uv pip install package_name
-```
 
-istalled dependecy add to local enviornment
-```
-uv add package_name
-```
+## Zipvoice Architecture
 
+<img width="672" height="190" alt="image" src="https://github.com/user-attachments/assets/24522690-dcbc-4a36-a28c-8d8629f5935b" />
+
+
+## Zipformer Architecture
+
+<img width="547" height="318" alt="image" src="https://github.com/user-attachments/assets/48f95db9-e64e-486d-b891-348add4c4110" />
+
+
+## Other Dependencies
 - Tokenizer (used sinlib)
