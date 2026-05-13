@@ -41,3 +41,16 @@ uv sync
 
 ## Other Dependencies
 - Tokenizer (used sinlib)
+
+
+## Citation
+
+Official zipvoice paper
+```
+@article{zhu2025zipvoice,
+      title={ZipVoice: Fast and High-Quality Zero-Shot Text-to-Speech with Flow Matching},
+      author={Zhu, Han and Kang, Wei and Yao, Zengwei and Guo, Liyong and Kuang, Fangjun and Li, Zhaoqing and Zhuang, Weiji and Lin, Long and Povey, Daniel},
+      journal={arXiv preprint arXiv:2506.13053},
+      year={2025}
+}
+```
