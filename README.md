@@ -40,7 +40,7 @@ uv sync
 
 
 ## Other Dependencies
-- Tokenizer (used sinlib)
+- Tokenizer (used [sinlib](https://github.com/Ransaka/sinlib))
 
 
 ## Citation
