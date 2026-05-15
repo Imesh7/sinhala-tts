@@ -14,6 +14,7 @@ from utils import uniquify
 from zipvoice.utils.checkpoint import load_checkpoint
 from zipvoice.utils.common import prepare_audio_input
 from zipvoice.zipvoice import ZipVoice
+import numpy as np
 import soundfile as sf
 
 SAMPLE_RATE = 24000
