@@ -1,5 +1,4 @@
 import math
-from shutil import copy
 from typing import Tuple, Union
 
 import torch
