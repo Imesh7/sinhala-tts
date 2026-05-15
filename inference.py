@@ -69,7 +69,6 @@ def run_inference(
     prompt_audio: Path,
     prompt_text: str,
     target_text: str,
-    output_path: Path,
     speed: float = 1.0,
 ) -> None:
     if torch.cuda.is_available():
@@ -115,10 +114,13 @@ def run_inference(
                 "TTS model output and vocoder features do not match."
             )
         audio = normalize_audio_for_save(audio)
+        
+        return audio.squeeze(1).cpu(), vocos.sample_rate
+    
 
+def save_audio(audio: torch.Tensor, sample_rate: int, output_path: Path) -> None:
     output_path = Path(uniquify(str(output_path)))
-    torchaudio.save(output_path, audio.squeeze(1), VOCOS_SAMPLE_RATE)
-
+    torchaudio.save(output_path, audio.squeeze(1), sample_rate=sample_rate)
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run Sinhala TTS inference.")
@@ -142,11 +144,11 @@ def build_parser() -> argparse.ArgumentParser:
 if __name__ == "__main__":
     parser = build_parser()
     args = parser.parse_args(args=[])
-    run_inference(
+    output_audio = run_inference(
         checkpoint_path=args.checkpoint,
         prompt_audio=args.prompt_audio,
         prompt_text=args.prompt_text,
         target_text=args.target_text,
-        output_path=args.output,
         speed=args.speed,
     )
+    save_audio(output_audio, VOCOS_SAMPLE_RATE, args.output)

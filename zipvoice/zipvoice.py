@@ -59,6 +59,7 @@ class ZipVoice(nn.Module):
         self.emb = nn.Embedding(vocab_size, text_emb_dim)
         self.solver = EulerSolver(self, func_name="flow_estimate")
 
+    # Trainig step
     def forward(
         self,
         tokens: List[List[int]],
