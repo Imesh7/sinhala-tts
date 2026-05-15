@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import random
 from torch import Tensor
+import copy
 
 from zipvoice.utils.common import to_tuple
 from zipvoice.zipformer.biasnorm import BiasNorm
