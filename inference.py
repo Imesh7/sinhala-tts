@@ -1,6 +1,7 @@
 ﻿import argparse
 import gc
 from pathlib import Path
+import tempfile
 
 import librosa
 import torch
@@ -13,7 +14,7 @@ from utils import uniquify
 from zipvoice.utils.checkpoint import load_checkpoint
 from zipvoice.utils.common import prepare_audio_input
 from zipvoice.zipvoice import ZipVoice
-
+import soundfile as sf
 
 SAMPLE_RATE = 24000
 N_FFT = 1024
@@ -114,9 +115,15 @@ def run_inference(
                 "TTS model output and vocoder features do not match."
             )
         audio = normalize_audio_for_save(audio)
+        audio_np = audio.squeeze(1).detach().cpu().numpy()
         
-        return audio.squeeze(1).cpu(), vocos.sample_rate
-    
+        if audio_np.ndim > 1:
+            audio_np = audio_np.flatten()
+
+        # Write to temp WAV file (Gradio serves this directly)
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            sf.write(tmp.name, audio_np, 24000, subtype="PCM_16")
+            return tmp.name  # <-- Gradio accepts str path
 
 def save_audio(audio: torch.Tensor, sample_rate: int, output_path: Path) -> None:
     output_path = Path(uniquify(str(output_path)))
