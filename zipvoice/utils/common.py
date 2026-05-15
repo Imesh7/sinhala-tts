@@ -47,7 +47,7 @@ def pad_labels(y: List[List[int]], pad_id: int, device: torch.device):
     Returns:
       Return a Tensor of padded transcripts.
     """
-    y = [token_ids.tolist() + [pad_id] for token_ids in y]
+    y = [token_ids + [pad_id] for token_ids in y]
     length = max([len(token_ids) for token_ids in y])
     y = [token_ids + [pad_id] * (length - len(token_ids)) for token_ids in y]
     return torch.tensor(y, dtype=torch.int64, device=device)
