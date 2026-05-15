@@ -5,7 +5,7 @@ import torch
 def load_checkpoint(model, optimizer, filename="checkpoint_step.pth"):
     if os.path.isfile(filename):
         print(f"Loading checkpoint '{filename}'")
-        checkpoint = torch.load(filename)
+        checkpoint = torch.load(filename, map_location=torch.device('cpu'), weights_only=False)
         start_epoch = checkpoint["epoch"]
         model.load_state_dict(checkpoint["model_state_dict"])
         print(f"Resumed from epoch {start_epoch}")
