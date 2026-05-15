@@ -115,7 +115,8 @@ def run_inference(
             )
         audio = normalize_audio_for_save(audio)
         
-        return audio.squeeze(1).cpu()
+        audio_np = audio.squeeze(1).detach().cpu().numpy()
+        return (24000, audio_np)
     
 
 def save_audio(audio: torch.Tensor, sample_rate: int, output_path: Path) -> None:
