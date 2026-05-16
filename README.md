@@ -5,7 +5,7 @@
     <img src="https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Model-FFD21E" alt="Hugging Face Model">
   </a>
   &nbsp;
-  <a href="https://huggingface.co/spaces/....">
+  <a href="https://huggingface.co/spaces/imesh7/sinhala-tts">
     <img src="https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Space-blue" alt="Hugging Face Space">
   </a>
   &nbsp;
