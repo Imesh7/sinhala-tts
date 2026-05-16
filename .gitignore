@@ -8,3 +8,5 @@ wheels/
 
 # Virtual environments
 .venv
+train
+zipvoice_architecture.excalidraw
