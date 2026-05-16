@@ -32,10 +32,10 @@ def update_batch_size(model: nn.Module, batch_size: int):
 
 
 def train():
-    n_mels = int(os.getenv("N_MELS"))
-    hop_length = int(os.getenv("HOP_LENGTH"))
-    n_fft = int(os.getenv("N_FFT"))
-    sample_rate = int(os.getenv("SAMPLE_RATE"))
+    n_mels = int(os.getenv("N_MELS", "100"))
+    hop_length = int(os.getenv("HOP_LENGTH", "256"))
+    n_fft = int(os.getenv("N_FFT", "1024"))
+    sample_rate = int(os.getenv("SAMPLE_RATE", "24000"))
 
     dataset_base_path = Path("/content/drive/MyDrive/nirvana_dataset")
     file_path = dataset_base_path
@@ -67,7 +67,7 @@ def train():
         )
         return
 
-    model = ZipVoice(feat_dim=n_mels).to(device)
+    model = ZipVoice(feat_dim=n_mels, vocab_size=tokenizer.vocab_size).to(device)
     num_epochs = NUM_EPOCHS
     batch_size_idx = 0
 
@@ -233,10 +233,10 @@ def sampling_during_training(
     prompt_audio = Path("/content/drive/My Drive/audio.wav")
     output_path = checkpoint_dir / "training_sample.wav"
 
-    n_mels = int(os.getenv("N_MELS"))
-    hop_length = int(os.getenv("HOP_LENGTH"))
-    n_fft = int(os.getenv("N_FFT"))
-    sample_rate = int(os.getenv("SAMPLE_RATE"))
+    n_mels = int(os.getenv("N_MELS", "100"))
+    hop_length = int(os.getenv("HOP_LENGTH", "256"))
+    n_fft = int(os.getenv("N_FFT", "1024"))
+    sample_rate = int(os.getenv("SAMPLE_RATE", "24000"))
 
     model.eval()
     if torch.cuda.is_available():

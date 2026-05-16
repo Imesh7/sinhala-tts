@@ -41,10 +41,10 @@ def run_inference(
         torch.cuda.empty_cache()
         gc.collect()
 
-    n_mels = int(os.getenv("N_MELS"))
-    hop_length = int(os.getenv("HOP_LENGTH"))
-    n_fft = int(os.getenv("N_FFT"))
-    sample_rate = int(os.getenv("SAMPLE_RATE"))
+    n_mels = int(os.getenv("N_MELS", "100"))
+    hop_length = int(os.getenv("HOP_LENGTH", "256"))
+    n_fft = int(os.getenv("N_FFT", "1024"))
+    sample_rate = int(os.getenv("SAMPLE_RATE", "24000"))
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     tokenizer = Tokenizer.from_pretrained("Ransaka/sinlib")

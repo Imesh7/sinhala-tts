@@ -3,6 +3,8 @@ import torch
 from torch.utils.data import DataLoader
 from dataset.dataset import TTSDataset
 
+VALIDATION_SET_PERCENTAGE = 0.1
+
 
 class DataModule:
     def __init__(self, data_path, tokenizer):

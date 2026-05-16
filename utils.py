@@ -34,7 +34,7 @@ def mel_spectrogram(
 def process_audio(
     file_path: Path, n_mels: int, hop_length: int, n_fft: int, sample_rate: int
 ) -> torch.Tensor:
-    waveform_np, sample_rate = librosa.load(file_path, sr=None)
+    waveform_np, original_sample_rate = librosa.load(file_path, sr=None)
     waveform = torch.from_numpy(waveform_np).float()
 
     if waveform.dim() == 1:
@@ -42,8 +42,8 @@ def process_audio(
     elif waveform.size(0) > 1:
         waveform = waveform.mean(dim=0, keepdim=True)
 
-    if sample_rate != sample_rate:
-        resampler = T.Resample(orig_freq=sample_rate, new_freq=sample_rate)
+    if original_sample_rate != sample_rate:
+        resampler = T.Resample(orig_freq=original_sample_rate, new_freq=sample_rate)
         waveform = resampler(waveform)
 
     mel_transform = mel_spectrogram(
