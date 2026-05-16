@@ -1,5 +1,6 @@
 ﻿from copy import copy
 import gc
+import os
 from pathlib import Path
 
 import torch
@@ -18,16 +19,9 @@ from zipvoice.utils.common import prepare_audio_input, sampling_time
 from zipvoice.zipformer.scaling import ScheduledFloat
 from zipvoice.zipvoice import ZipVoice
 
-
 BATCH_SIZE = 4
-SAMPLE_RATE = 24000
-N_FFT = 1024
-HOP_LENGTH = 256
-TOP_DB = 80.0
-VOCOS_SAMPLE_RATE = 24000
-N_MELS = 100
-VALIDATION_SET_PERCENTAGE = 0.1
 ACCUMULATION_STEPS = 8
+NUM_EPOCHS = 120
 
 
 def update_batch_size(model: nn.Module, batch_size: int):
@@ -38,6 +32,11 @@ def update_batch_size(model: nn.Module, batch_size: int):
 
 
 def train():
+    n_mels = int(os.getenv("N_MELS"))
+    hop_length = int(os.getenv("HOP_LENGTH"))
+    n_fft = int(os.getenv("N_FFT"))
+    sample_rate = int(os.getenv("SAMPLE_RATE"))
+
     dataset_base_path = Path("/content/drive/MyDrive/nirvana_dataset")
     file_path = dataset_base_path
 
@@ -56,18 +55,20 @@ def train():
         batch_size=BATCH_SIZE,
         shuffle=True,
         num_workers=4,
-        n_mels=N_MELS,
-        hop_length=HOP_LENGTH,
-        n_fft=N_FFT,
-        sample_rate=SAMPLE_RATE,
+        n_mels=n_mels,
+        hop_length=hop_length,
+        n_fft=n_fft,
+        sample_rate=sample_rate,
     )
 
     if len(train_dataloader) == 0:
-        print(f"Warning: Training dataloader is empty. No audio files found in {file_path}.")
+        print(
+            f"Warning: Training dataloader is empty. No audio files found in {file_path}."
+        )
         return
 
-    model = ZipVoice(feat_dim=N_MELS).to(device)
-    num_epochs = 30
+    model = ZipVoice(feat_dim=n_mels).to(device)
+    num_epochs = NUM_EPOCHS
     batch_size_idx = 0
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-6)
@@ -84,9 +85,11 @@ def train():
 
     last_checkpoint = 500
     checkpoint_path = checkpoint_dir / f"checkpoint_step{last_checkpoint}.pth"
-    model, optimizer, start_epoch = load_checkpoint(model, optimizer, str(checkpoint_path))
+    model, optimizer, start_epoch = load_checkpoint(
+        model, optimizer, str(checkpoint_path)
+    )
     cfg_drop_ratio = 0.2
-    
+
     model_avg = copy.deepcopy(model)
     model_avg.requires_grad_(False)
 
@@ -133,9 +136,9 @@ def train():
                     scaler.update()
                 else:
                     optimizer.step()
-                    
+
                 update_ema(model, model_avg)
-                
+
                 optimizer.zero_grad(set_to_none=True)
                 scheduler.step()
                 batch_size_idx += 1
@@ -145,7 +148,9 @@ def train():
                 writer.add_scalar("LR", scheduler.get_last_lr()[0], batch_size_idx)
 
                 if batch_size_idx % 500 == 0:
-                    checkpoint_file_path = checkpoint_dir / f"checkpoint_step{batch_size_idx}.pt"
+                    checkpoint_file_path = (
+                        checkpoint_dir / f"checkpoint_step{batch_size_idx}.pt"
+                    )
                     save_checkpoint(
                         model,
                         optimizer,
@@ -176,12 +181,13 @@ def train():
         )
         sampling_during_training(model_avg, tokenizer, vocos, device, checkpoint_dir)
 
+
 # Expotential Moving Average (EMA) update for model parameters
 def update_ema(model, model_avg, decay=0.999):
     with torch.no_grad():
         for p, p_avg in zip(model.parameters(), model_avg.parameters()):
             # p_avg.data.lerp_(p.data, 1-decay)  # p_avg = decay*p_avg + (1-decay)*p
-            p_avg.data.mul_(decay).add_(p.data, alpha=1-decay)
+            p_avg.data.mul_(decay).add_(p.data, alpha=1 - decay)
 
 
 def validation_output(model, epoch, val_dataloader, writer, device: torch.device):
@@ -227,6 +233,11 @@ def sampling_during_training(
     prompt_audio = Path("/content/drive/My Drive/audio.wav")
     output_path = checkpoint_dir / "training_sample.wav"
 
+    n_mels = int(os.getenv("N_MELS"))
+    hop_length = int(os.getenv("HOP_LENGTH"))
+    n_fft = int(os.getenv("N_FFT"))
+    sample_rate = int(os.getenv("SAMPLE_RATE"))
+
     model.eval()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -240,8 +251,20 @@ def sampling_during_training(
 
     model.to(device)
 
-    feature_mel_spec = process_audio(prompt_audio, n_mels=N_MELS).unsqueeze(0).to(device)
-    prompt_features, prompt_feature_lens = prepare_audio_input(feature_mel_spec, device=device)
+    feature_mel_spec = (
+        process_audio(
+            prompt_audio,
+            n_mels=n_mels,
+            hop_length=hop_length,
+            n_fft=n_fft,
+            sample_rate=sample_rate,
+        )
+        .unsqueeze(0)
+        .to(device)
+    )
+    prompt_features, prompt_feature_lens = prepare_audio_input(
+        feature_mel_spec, device=device
+    )
 
     with torch.no_grad():
         generated_mel, _, _, _ = model.sample(
@@ -254,7 +277,7 @@ def sampling_during_training(
         )
 
         generated_mel = generated_mel.permute(0, 2, 1)
-        audio = vocos.decode(generated_mel).cpu()
+        audio = vocos.decode(torch.exp(generated_mel)).cpu()
         peak = audio.abs().max().item()
         rms = audio.pow(2).mean().sqrt().item()
         print(f"Decoded audio stats: peak={peak:.6f}, rms={rms:.6f}")
@@ -266,7 +289,7 @@ def sampling_during_training(
         audio = normalize_audio_for_save(audio)
 
     output_path = Path(uniquify(str(output_path)))
-    torchaudio.save(output_path, audio.squeeze(1), VOCOS_SAMPLE_RATE)
+    torchaudio.save(output_path, audio.squeeze(1), sample_rate)
     model.train()
 
 

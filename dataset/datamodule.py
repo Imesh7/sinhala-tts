@@ -1,10 +1,7 @@
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
 from torch.utils.data import DataLoader
 from dataset.dataset import TTSDataset
-from train import VALIDATION_SET_PERCENTAGE
 
 
 class DataModule:

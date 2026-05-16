@@ -1,4 +1,8 @@
 import os
+from pathlib import Path
+import librosa
+import torch
+import torchaudio.transforms as T
 
 
 def uniquify(path):
@@ -10,3 +14,44 @@ def uniquify(path):
         counter += 1
 
     return path
+
+
+def mel_spectrogram(
+    n_mels: int, hop_length: int, n_fft: int, sample_rate: int
+) -> T.MelSpectrogram:
+    return T.MelSpectrogram(
+        sample_rate=sample_rate,
+        n_fft=n_fft,
+        hop_length=hop_length,
+        n_mels=n_mels,
+        power=1.0,
+        normalized=False,
+        center=True,
+    )
+
+
+# Process Audio before Inference & training
+def process_audio(
+    file_path: Path, n_mels: int, hop_length: int, n_fft: int, sample_rate: int
+) -> torch.Tensor:
+    waveform_np, sample_rate = librosa.load(file_path, sr=None)
+    waveform = torch.from_numpy(waveform_np).float()
+
+    if waveform.dim() == 1:
+        waveform = waveform.unsqueeze(0)
+    elif waveform.size(0) > 1:
+        waveform = waveform.mean(dim=0, keepdim=True)
+
+    if sample_rate != sample_rate:
+        resampler = T.Resample(orig_freq=sample_rate, new_freq=sample_rate)
+        waveform = resampler(waveform)
+
+    mel_transform = mel_spectrogram(
+        n_mels=n_mels, hop_length=hop_length, n_fft=n_fft, sample_rate=sample_rate
+    )
+
+    mel_spec = mel_transform(waveform)  # [1, n_mels, time]
+
+    mel_log = torch.log(torch.clamp(mel_spec, min=1e-7))  # [1, n_mels, time]
+    mel_log = mel_log.squeeze(0)  # [n_mels, time]
+    return mel_log
