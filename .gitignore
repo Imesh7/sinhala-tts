@@ -10,3 +10,4 @@ wheels/
 .venv
 train
 zipvoice_architecture.excalidraw
+gradio
