@@ -110,6 +110,7 @@ def run_inference(
 def save_audio(input_path: str, output_path: Path) -> None:
     output_path = Path(uniquify(str(output_path)))
     waveform, sample_rate = torchaudio.load(input_path)
+    print(f"Generated audio sample rate {sample_rate} Hz")
     torchaudio.save(output_path, waveform, sample_rate=sample_rate)
 
 

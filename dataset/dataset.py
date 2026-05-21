@@ -42,10 +42,15 @@ class TTSDataset(Dataset):
         text_tokens = self.tok(row["sentence"]).input_ids
         wav_path = self.root / row["audio"].replace("\\", "/")
         wav, sr = librosa.load(str(wav_path), sr=None)
-        w = torch.from_numpy(wav).float().unsqueeze(0)
+        w = torch.from_numpy(wav).float()
+
+        if w.dim() == 1:
+            w = w.unsqueeze(0)
+        elif w.size(0) > 1:
+            w = w.mean(dim=0, keepdim=True)
 
         if sr != self.sample_rate:
-            if self.rs is None or self.rs.orig_freq != sr:
+            if self.rs is None or getattr(self.rs, "orig_freq", None) != sr:
                 self.rs = torchaudio.transforms.Resample(sr, self.sample_rate)
             w = self.rs(w)
 
