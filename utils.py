@@ -4,6 +4,9 @@ import librosa
 import torch
 import torchaudio.transforms as T
 
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+
 
 def uniquify(path):
     filename, extension = os.path.splitext(path)
@@ -55,3 +58,22 @@ def process_audio(
     mel_log = torch.log(torch.clamp(mel_spec, min=1e-7))  # [1, n_mels, time]
     mel_log = mel_log.squeeze(0)  # [n_mels, time]
     return mel_log
+
+
+
+def compute_mel_stats(dataloader : DataLoader):
+    
+    running_sum = 0.0
+    running_sq  = 0.0
+    count       = 0
+
+    for batch in tqdm(dataloader, desc="Computing mel stats"):
+        mel = batch[0]["mel_spec"]  # [n_mels, T]
+        running_sum += mel.sum().item()
+        running_sq  += (mel ** 2).sum().item()
+        count       += mel.numel()
+
+    mean = running_sum / count
+    std  = (running_sq / count - mean ** 2) ** 0.5
+    print(f"mel_mean = {mean:.4f},  mel_std = {std:.4f}")
+    return mean, std

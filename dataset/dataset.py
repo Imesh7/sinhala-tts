@@ -34,6 +34,11 @@ class TTSDataset(Dataset):
         )
         self.rs = None
 
+        self.mel_mean = (
+            -1.7977
+        )  # These values are dataset-specific and should be computed from the training data
+        self.mel_std = 2.0155
+
     def __len__(self):
         return len(self.meta)
 
@@ -41,7 +46,7 @@ class TTSDataset(Dataset):
         row = self.meta.iloc[idx]
         text_tokens = self.tok(row["sentence"]).input_ids
         wav_path = self.root / row["audio"].replace("\\", "/")
-        wav, sr = librosa.load(str(wav_path), sr=None)
+        wav, sr = librosa.load(str(wav_path), sr=None, mono=True)
         w = torch.from_numpy(wav).float()
 
         if w.dim() == 1:
@@ -54,6 +59,22 @@ class TTSDataset(Dataset):
                 self.rs = torchaudio.transforms.Resample(sr, self.sample_rate)
             w = self.rs(w)
 
-        mel = self.mel(w).clamp(min=1e-7).log().squeeze(0)
+        # Trim silence
+        wav_np = w.squeeze(0).numpy()
+        trimmed_np, _ = librosa.effects.trim(
+            wav_np,
+            top_db=30,
+            frame_length=512,
+            hop_length=128,
+        )
+        w = torch.from_numpy(trimmed_np).unsqueeze(0)
+
+        w = w / (w.abs().max() + 1e-8)
+
+        mel = self.mel(w)
+        mel = torch.clamp(mel, min=1e-7).log().squeeze(0)
+
+        # Mel normalize
+        mel = (mel - self.mel_mean) / self.mel_std
 
         return {"text_tokens": text_tokens, "mel_spec": mel, "text": row["sentence"]}
