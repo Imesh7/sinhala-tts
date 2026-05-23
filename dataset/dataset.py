@@ -78,12 +78,15 @@ class TTSDataset(Dataset):
         )
         # Resampler will be created on-demand
         self.resampler = None
-
+        
+        # mean & std depends on audio data
+        # so we have to compute them on our dataset
+        # used `compute_mel_stats` function to compute them
         self.mel_mean = -1.7977
         self.mel_std = 2.0155
 
     def __len__(self):
-        return len(self.meta)
+        return len(self.metadata)
 
     def __getitem__(self, idx):
         row = self.metadata.iloc[idx]
