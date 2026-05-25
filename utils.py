@@ -86,7 +86,7 @@ def compute_mel_stats(dataloader: DataLoader):
     count = 0
 
     for batch in tqdm(dataloader, desc="Computing mel stats"):
-        mel = batch[0]["mel_spec"]  # [n_mels, T]
+        mel = batch["mel_specs"]  # [n_mels, T]
         running_sum += mel.sum().item()
         running_sq += (mel**2).sum().item()
         count += mel.numel()
