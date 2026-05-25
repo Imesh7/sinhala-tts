@@ -12,12 +12,13 @@ from tqdm import tqdm
 from vocos import Vocos
 
 from dataset.datamodule import DataModule
-from inference import normalize_audio_for_save, process_audio, tokenize_text
+from inference import process_audio, tokenize_text
 from utils import uniquify
 from zipvoice.utils.checkpoint import load_checkpoint, save_checkpoint
 from zipvoice.utils.common import prepare_audio_input, sampling_time
 from zipvoice.zipformer.scaling import ScheduledFloat
 from zipvoice.zipvoice import ZipVoice
+import soundfile as sf
 
 BATCH_SIZE = 4
 ACCUMULATION_STEPS = 8
@@ -89,6 +90,9 @@ def train():
         model, optimizer, str(checkpoint_path)
     )
     cfg_drop_ratio = 0.2
+    
+    mel_mean = -1.7977
+    mel_std = 2.0155
 
     model_avg = copy.deepcopy(model)
     model_avg.requires_grad_(False)
@@ -179,7 +183,7 @@ def train():
             writer=writer,
             device=device,
         )
-        sampling_during_training(model_avg, tokenizer, vocos, device, checkpoint_dir)
+        sampling_during_training(model_avg, tokenizer, vocos, device, checkpoint_dir, mel_mean, mel_std)
 
 
 # Expotential Moving Average (EMA) update for model parameters
@@ -227,6 +231,8 @@ def sampling_during_training(
     vocos: Vocos,
     device: torch.device,
     checkpoint_dir: Path,
+    mel_mean: float = -1.7977,
+    mel_std: float = 2.0155,
 ):
     prompt_text = "ඒක නිසා මම"
     target_text = "ඔබට කොහොමද ඉන්නේ"
@@ -276,17 +282,36 @@ def sampling_during_training(
             device=device,
         )
 
+        # Match vocoder expected shape: [B, n_mels, T]
         generated_mel = generated_mel.permute(0, 2, 1)
-        audio = vocos.decode(torch.exp(generated_mel)).cpu()
+
+        # Denormalize (reverse training normalization)
+        generated_mel = generated_mel * mel_std + mel_mean
+
+        # Exponentiate to get back to linear scale
+        generated_mel = torch.exp(generated_mel)
+
+        audio = vocos.decode(generated_mel).cpu()  # usually returns [B, T]
+
+        # debug print
         peak = audio.abs().max().item()
         rms = audio.pow(2).mean().sqrt().item()
-        print(f"Decoded audio stats: peak={peak:.6f}, rms={rms:.6f}")
+        print(f"peak={peak:.4f}, rms={rms:.4f}")
         if peak < 1e-4:
-            print(
-                "Warning: decoded waveform is almost silent. This usually means the "
-                "TTS model output and vocoder features do not match."
-            )
-        audio = normalize_audio_for_save(audio)
+            print("Warning: decoded audio is silent. Check mel denormalization.")
+
+        # Normalize audio to [-1, 1] to prevent int16 clipping
+        audio = audio / (audio.abs().max() + 1e-8)
+
+        # Vocos returns [B, T]; squeeze batch if B==1, otherwise handle properly
+        audio_np = audio.squeeze(0).numpy()  # [T] for single sample
+        
+        if audio_np.ndim > 1:
+            audio_np = audio_np.squeeze()
+
+        # Save
+        # with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        sf.write(str(output_path), audio_np, sample_rate, subtype="PCM_16")
 
     output_path = Path(uniquify(str(output_path)))
     torchaudio.save(output_path, audio.squeeze(1), sample_rate)
