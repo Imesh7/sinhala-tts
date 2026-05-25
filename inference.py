@@ -23,18 +23,12 @@ def tokenize_text(tokenizer: Tokenizer, text: str) -> list[list[int]]:
 
 
 
-def normalize_audio_for_save(audio: torch.Tensor) -> torch.Tensor:
-    peak = audio.abs().max()
-    if torch.isclose(peak, torch.tensor(0.0, device=audio.device)):
-        return audio
-    return 0.95 * (audio / peak)
-
-
 def run_inference(
     checkpoint_path: Path,
     prompt_audio: Path,
     prompt_text: str,
     target_text: str,
+    output_path: Path = Path("output.wav"),
     speed: float = 1.0,
 ) -> None:
     if torch.cuda.is_available():
@@ -59,6 +53,9 @@ def run_inference(
 
     vocos = Vocos.from_pretrained("charactr/vocos-mel-24khz").to(device)
     vocos.eval()
+    
+    mel_mean = -1.7977
+    mel_std = 2.0155
 
     feature_mel_spec = (
         process_audio(
@@ -67,6 +64,8 @@ def run_inference(
             hop_length=hop_length,
             n_fft=n_fft,
             sample_rate=sample_rate,
+            mel_mean=mel_mean,
+            mel_std=mel_std,
         )
         .unsqueeze(0)
         .to(device)
@@ -85,26 +84,37 @@ def run_inference(
             device=device,
         )
 
+        # Match vocoder expected shape: [B, n_mels, T]
         generated_mel = generated_mel.permute(0, 2, 1)
-        audio = vocos.decode(torch.exp(generated_mel)).cpu()
 
+        # Denormalize (reverse training normalization)
+        generated_mel = generated_mel * mel_std + mel_mean
+
+        # Exponentiate to get back to linear scale
+        generated_mel = torch.exp(generated_mel)
+
+        audio = vocos.decode(generated_mel).cpu()  # usually returns [B, T]
+
+        # debug print
         peak = audio.abs().max().item()
         rms = audio.pow(2).mean().sqrt().item()
-        print(f"Decoded audio stats: peak={peak:.6f}, rms={rms:.6f}")
+        print(f"peak={peak:.4f}, rms={rms:.4f}")
         if peak < 1e-4:
-            print(
-                "Warning: decoded waveform is almost silent. This usually means the "
-                "TTS model output and vocoder features do not match."
-            )
-        audio = normalize_audio_for_save(audio)
-        audio_np = audio.squeeze(1).detach().cpu().numpy()
+            print("Warning: decoded audio is silent. Check mel denormalization.")
 
+        # Normalize audio to [-1, 1] to prevent int16 clipping
+        audio = audio / (audio.abs().max() + 1e-8)
+
+        # Vocos returns [B, T]; squeeze batch if B==1, otherwise handle properly
+        audio_np = audio.squeeze(0).numpy()  # [T] for single sample
+        
         if audio_np.ndim > 1:
-            audio_np = audio_np.flatten()
+            audio_np = audio_np.squeeze()
 
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            sf.write(tmp.name, audio_np, sample_rate, subtype="PCM_16")
-            return tmp.name
+        # Save
+        # with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        sf.write(str(output_path), audio_np, sample_rate, subtype="PCM_16")
+        # return tmp.name
 
 
 def save_audio(input_path: str, output_path: Path) -> None:
