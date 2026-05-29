@@ -110,11 +110,18 @@ def run_inference(
         
         if audio_np.ndim > 1:
             audio_np = audio_np.squeeze()
+            
+        save = False
+        
+        if save:
+            sf.write(str(output_path), audio_np, sample_rate, subtype="PCM_16")
+        else:
+            # Save
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                sf.write(str(tmp.name), audio_np, sample_rate, subtype="PCM_16")
+                return tmp.name
+            
 
-        # Save
-        # with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-        sf.write(str(output_path), audio_np, sample_rate, subtype="PCM_16")
-        # return tmp.name
 
 
 def save_audio(input_path: str, output_path: Path) -> None:
